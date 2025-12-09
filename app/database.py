@@ -11,6 +11,9 @@ from sqlalchemy.orm import sessionmaker
 from .config import settings
 
 
+if not settings.DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not set. Please configure your database connection.")
+
 # Create the SQLAlchemy engine with the PostgreSQL database URL
 engine = create_engine(
     settings.DATABASE_URL,
