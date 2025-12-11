@@ -6,7 +6,8 @@ This module provides endpoints for clock-in/out and break management.
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from typing import List
 
 from ..database import get_db
 from ..models.employee import Employee
@@ -38,8 +39,21 @@ def calculate_hours(clock_in: datetime, clock_out: datetime) -> str:
     """
     if not clock_in or not clock_out:
         return "0h 0m"
-    
-    diff = clock_out - clock_in
+
+    # Normalize datetimes to UTC-naive for safe subtraction when some
+    # datetimes may be timezone-aware and others naive.
+    def _normalize(dt: datetime) -> datetime:
+        if dt is None:
+            return dt
+        if dt.tzinfo is None:
+            return dt
+        # convert to UTC then drop tzinfo
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+    ci = _normalize(clock_in)
+    co = _normalize(clock_out)
+
+    diff = co - ci
     hours = int(diff.total_seconds() // 3600)
     minutes = int((diff.total_seconds() % 3600) // 60)
     return f"{hours}h {minutes}m"
@@ -123,20 +137,32 @@ def clock_in(
         HTTPException: 400 if already clocked in
     """
     today = date.today()
-    now = datetime.now()
-    
-    # Check if already clocked in today
+    now = datetime.now(timezone.utc)
+
+    # Check if an attendance row already exists for today
     existing = db.query(Attendance).filter(
         Attendance.employee_id == current_employee.id,
         Attendance.date == today
     ).first()
-    
-    if existing and existing.clock_in:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Already clocked in for today"
+
+    if existing:
+        if existing.clock_in:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Already clocked in for today"
+            )
+        # update existing attendance row instead of creating duplicate
+        existing.clock_in = now
+        existing.status = "present"
+        db.commit()
+        db.refresh(existing)
+
+        return ClockInResponse(
+            message="Clocked in successfully",
+            clock_in=now,
+            attendance_id=existing.id
         )
-    
+
     attendance = Attendance(
         employee_id=current_employee.id,
         date=today,
@@ -146,7 +172,7 @@ def clock_in(
     db.add(attendance)
     db.commit()
     db.refresh(attendance)
-    
+
     return ClockInResponse(
         message="Clocked in successfully",
         clock_in=now,
@@ -173,7 +199,7 @@ def clock_out(
         HTTPException: 400 if not clocked in or already clocked out
     """
     today = date.today()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     
     attendance = db.query(Attendance).filter(
         Attendance.employee_id == current_employee.id,
@@ -200,7 +226,12 @@ def clock_out(
     
     if active_break:
         active_break.end_time = now
-        diff = now - active_break.start_time
+        # normalize before subtracting
+        try:
+            diff = (active_break.end_time.astimezone(timezone.utc).replace(tzinfo=None)
+                    - active_break.start_time.astimezone(timezone.utc).replace(tzinfo=None))
+        except Exception:
+            diff = now - active_break.start_time
         active_break.duration_minutes = int(diff.total_seconds() // 60)
     
     attendance.clock_out = now
@@ -235,7 +266,7 @@ def start_break(
         HTTPException: 400 if not clocked in or already on break
     """
     today = date.today()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     
     attendance = db.query(Attendance).filter(
         Attendance.employee_id == current_employee.id,
@@ -298,7 +329,7 @@ def end_break(
         HTTPException: 400 if not on a break
     """
     today = date.today()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     
     attendance = db.query(Attendance).filter(
         Attendance.employee_id == current_employee.id,
@@ -323,7 +354,11 @@ def end_break(
         )
     
     active_break.end_time = now
-    diff = now - active_break.start_time
+    try:
+        diff = (active_break.end_time.astimezone(timezone.utc).replace(tzinfo=None)
+                - active_break.start_time.astimezone(timezone.utc).replace(tzinfo=None))
+    except Exception:
+        diff = now - active_break.start_time
     active_break.duration_minutes = int(diff.total_seconds() // 60)
     
     db.commit()
@@ -334,3 +369,108 @@ def end_break(
         break_end=now,
         duration_minutes=active_break.duration_minutes
     )
+
+
+@router.get("/logs", response_model=List[AttendanceResponse])
+def get_attendance_logs(
+    start_date: date | None = None,
+    end_date: date | None = None,
+    page: int = 1,
+    per_page: int = 7,
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get datewise attendance logs for the current user with pagination and zero-filled days.
+
+    Query parameters:
+    - start_date (optional): ISO date string (YYYY-MM-DD). If omitted, defaults to 7 days before today.
+    - end_date (optional): ISO date string (YYYY-MM-DD). If omitted, defaults to today.
+    - page (optional): page number (1-indexed). Default 1.
+    - per_page (optional): number of days per page. Default 7. Max 90.
+
+    The endpoint returns one entry per date in the requested page. Dates without
+    an attendance record will be returned with null clock_in/clock_out and
+    total_hours (zero-filled days) so the UI can render continuous date ranges.
+    """
+    today = date.today()
+    if not end_date:
+        end_date = today
+    if not start_date:
+        start_date = today - timedelta(days=6)  # default to last 7 days
+
+    # Validate range and pagination params
+    if start_date > end_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be <= end_date")
+
+    if page < 1:
+        page = 1
+
+    # enforce sensible per_page bounds
+    max_per_page = 90
+    if per_page < 1:
+        per_page = 1
+    if per_page > max_per_page:
+        per_page = max_per_page
+
+    # Compute page window (dates)
+    offset_days = (page - 1) * per_page
+    page_start = start_date + timedelta(days=offset_days)
+    if page_start > end_date:
+        return []
+    remaining_days = (end_date - page_start).days + 1
+    page_span = min(per_page, remaining_days)
+    page_end = page_start + timedelta(days=page_span - 1)
+
+    # Fetch attendance records for the page window
+    records = db.query(Attendance).filter(
+        Attendance.employee_id == current_employee.id,
+        Attendance.date >= page_start,
+        Attendance.date <= page_end
+    ).order_by(Attendance.date.asc()).all()
+
+    # Map records by date for quick lookup
+    records_by_date = {r.date: r for r in records}
+
+    result: List[AttendanceResponse] = []
+    for day_offset in range((page_end - page_start).days + 1):
+        d = page_start + timedelta(days=day_offset)
+        attendance = records_by_date.get(d)
+        if not attendance:
+            # zero-filled entry for dates without records
+            result.append(AttendanceResponse(
+                id=0,
+                date=d,
+                clock_in=None,
+                clock_out=None,
+                status=None,
+                total_hours=None,
+                breaks=[],
+                is_on_break=False
+            ))
+            continue
+
+        is_on_break = any(b.end_time is None for b in attendance.breaks)
+        breaks = [BreakResponse(
+            id=b.id,
+            start_time=b.start_time,
+            end_time=b.end_time,
+            duration_minutes=b.duration_minutes
+        ) for b in attendance.breaks]
+
+        total_hours = attendance.total_hours
+        if not total_hours and attendance.clock_in and attendance.clock_out:
+            total_hours = calculate_hours(attendance.clock_in, attendance.clock_out)
+
+        result.append(AttendanceResponse(
+            id=attendance.id,
+            date=attendance.date,
+            clock_in=attendance.clock_in,
+            clock_out=attendance.clock_out,
+            status=attendance.status,
+            total_hours=total_hours,
+            breaks=breaks,
+            is_on_break=is_on_break
+        ))
+
+    return result
