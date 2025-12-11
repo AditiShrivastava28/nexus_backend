@@ -17,6 +17,7 @@ from ..schemas.request import (
     RegularizationRequest,
     ExpenseRequest,
     HelpRequest,
+    LeaveRequest,
     RequestResponse
 )
 from ..utils.deps import get_current_employee
@@ -42,13 +43,17 @@ def request_wfh(
     Returns:
         RequestResponse: Created request
     """
+    # create request record with from/to/total enforced by schema
+    details = {"reason": wfh_data.reason, "total": wfh_data.total}
     request = Request(
         requester_id=current_employee.id,
         request_type="wfh",
         title="Work From Home Request",
         description=wfh_data.reason,
-        date=wfh_data.date,
-        status="pending"
+        date=wfh_data.from_date,
+        end_date=wfh_data.end_date,
+        status="pending",
+        details=json.dumps(details)
     )
     db.add(request)
     db.commit()
@@ -61,13 +66,15 @@ def request_wfh(
         description=request.description,
         date=request.date,
         status=request.status,
-        created_at=request.created_at
+        created_at=request.created_at,
+        total_days=wfh_data.total,
+        message="Request sent"
     )
 
 
 @router.post("/leave", response_model=RequestResponse, status_code=status.HTTP_201_CREATED)
 def apply_leave(
-    leave_data: dict,
+    leave_data: LeaveRequest,
     current_employee: Employee = Depends(get_current_employee),
     db: Session = Depends(get_db)
 ):
@@ -84,14 +91,14 @@ def apply_leave(
     """
     from ..models.leave import Leave
     
-    # Create leave record
+    # Create leave record (use validated schema fields)
     leave = Leave(
         employee_id=current_employee.id,
-        leave_type=leave_data.get("leave_type", "casual"),
-        start_date=leave_data.get("start_date"),
-        end_date=leave_data.get("end_date"),
-        days=leave_data.get("days", 1),
-        reason=leave_data.get("reason"),
+        leave_type=leave_data.leave_type or "casual",
+        start_date=leave_data.from_date,
+        end_date=leave_data.end_date,
+        days=leave_data.total,
+        reason=leave_data.reason,
         status="pending"
     )
     db.add(leave)
@@ -102,12 +109,12 @@ def apply_leave(
     request = Request(
         requester_id=current_employee.id,
         request_type="leave",
-        title=f"Leave Request: {leave_data.get('leave_type', 'casual').title()}",
-        description=leave_data.get("reason"),
-        date=leave_data.get("start_date"),
-        end_date=leave_data.get("end_date"),
+        title=f"Leave Request: { (leave_data.leave_type or 'casual').title() }",
+        description=leave_data.reason,
+        date=leave_data.from_date,
+        end_date=leave_data.end_date,
         status="pending",
-        details=json.dumps({"leave_id": leave.id})
+        details=json.dumps({"leave_id": leave.id, "total": leave.days})
     )
     db.add(request)
     db.commit()
@@ -120,7 +127,9 @@ def apply_leave(
         description=request.description,
         date=request.date,
         status=request.status,
-        created_at=request.created_at
+        created_at=request.created_at,
+        total_days=leave.days,
+        message="Request sent"
     )
 
 
@@ -143,15 +152,17 @@ def request_regularization(
     """
     details = {
         "clock_in": reg_data.clock_in,
-        "clock_out": reg_data.clock_out
+        "clock_out": reg_data.clock_out,
+        "total": reg_data.total
     }
-    
+
     request = Request(
         requester_id=current_employee.id,
         request_type="regularization",
         title="Attendance Regularization",
         description=reg_data.reason,
-        date=reg_data.date,
+        date=reg_data.from_date,
+        end_date=reg_data.end_date,
         status="pending",
         details=json.dumps(details)
     )
@@ -166,7 +177,9 @@ def request_regularization(
         description=request.description,
         date=request.date,
         status=request.status,
-        created_at=request.created_at
+        created_at=request.created_at,
+        total_days=reg_data.total,
+        message="Request sent"
     )
 
 
@@ -192,9 +205,11 @@ def submit_expense(
         request_type="expense",
         title=expense_data.title,
         description=expense_data.description,
-        date=expense_data.date or date.today(),
+        date=expense_data.from_date,
+        end_date=expense_data.end_date,
         amount=expense_data.amount,
-        status="pending"
+        status="pending",
+        details=json.dumps({"total": expense_data.total})
     )
     db.add(request)
     db.commit()
@@ -208,7 +223,9 @@ def submit_expense(
         date=request.date,
         status=request.status,
         amount=request.amount,
-        created_at=request.created_at
+        created_at=request.created_at,
+        total_days=expense_data.total,
+        message="Request sent"
     )
 
 
@@ -234,8 +251,10 @@ def raise_help_ticket(
         request_type="help",
         title=help_data.title,
         description=help_data.description,
-        date=date.today(),
-        status="pending"
+        date=help_data.from_date,
+        end_date=help_data.end_date,
+        status="pending",
+        details=json.dumps({"total": help_data.total})
     )
     db.add(request)
     db.commit()
@@ -248,5 +267,7 @@ def raise_help_ticket(
         description=request.description,
         date=request.date,
         status=request.status,
-        created_at=request.created_at
+        created_at=request.created_at,
+        total_days=help_data.total,
+        message="Request sent"
     )

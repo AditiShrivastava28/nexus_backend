@@ -128,9 +128,24 @@ def approve_request(
                     LeaveBalance.leave_type == leave.leave_type,
                     LeaveBalance.year == date_type.today().year
                 ).first()
-                if balance:
-                    balance.used_days += leave.days
-                    balance.remaining_days = balance.total_days - balance.used_days
+                # If no balance exists, create a default one
+                if not balance:
+                    defaults = {"casual": 12, "sick": 10, "annual": 15, "personal": 5}
+                    total = defaults.get(leave.leave_type, 12)
+                    balance = LeaveBalance(
+                        employee_id=leave.employee_id,
+                        leave_type=leave.leave_type,
+                        year=date_type.today().year,
+                        total_days=total,
+                        used_days=0,
+                        remaining_days=total
+                    )
+                    db.add(balance)
+                    db.commit()
+                    db.refresh(balance)
+
+                balance.used_days += leave.days
+                balance.remaining_days = balance.total_days - balance.used_days
     
     db.commit()
     

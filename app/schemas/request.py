@@ -10,35 +10,45 @@ from typing import Optional
 from datetime import date, datetime
 
 
-class WFHRequest(BaseModel):
+class BaseRequest(BaseModel):
+    """
+    Base request fields required for all request types.
+
+    Attributes:
+        from_date: Start date for the request
+        end_date: End date for the request
+        total: Total days (integer)
+    """
+    from_date: date
+    end_date: date
+    total: int
+
+
+class WFHRequest(BaseRequest):
     """
     Schema for WFH request.
     
     Attributes:
-        date: WFH date
         reason: Reason for WFH
     """
-    date: date
     reason: Optional[str] = None
 
 
-class RegularizationRequest(BaseModel):
+class RegularizationRequest(BaseRequest):
     """
     Schema for attendance regularization request.
     
     Attributes:
-        date: Date to regularize
         clock_in: Corrected clock-in time
         clock_out: Corrected clock-out time
         reason: Reason for regularization
     """
-    date: date
     clock_in: Optional[str] = None
     clock_out: Optional[str] = None
     reason: Optional[str] = None
 
 
-class ExpenseRequest(BaseModel):
+class ExpenseRequest(BaseRequest):
     """
     Schema for expense claim request.
     
@@ -46,15 +56,15 @@ class ExpenseRequest(BaseModel):
         title: Expense title
         amount: Expense amount
         description: Expense description
-        date: Expense date
+        description: Expense description
     """
     title: str
     amount: float
     description: Optional[str] = None
-    date: Optional[date] = None
 
 
-class HelpRequest(BaseModel):
+
+class HelpRequest(BaseRequest):
     """
     Schema for help ticket.
     
@@ -64,6 +74,14 @@ class HelpRequest(BaseModel):
     """
     title: str
     description: str
+
+
+class LeaveRequest(BaseRequest):
+    """
+    Schema for applying leaves. Inherits from BaseRequest and adds leave_type and reason.
+    """
+    leave_type: Optional[str] = "casual"
+    reason: Optional[str] = None
 
 
 class RequestResponse(BaseModel):
@@ -88,6 +106,10 @@ class RequestResponse(BaseModel):
     status: str
     amount: Optional[float] = None
     created_at: Optional[datetime] = None
+    # Total days applied (if applicable)
+    total_days: Optional[int] = None
+    # Informational message (e.g., "Request sent")
+    message: Optional[str] = None
 
     class Config:
         from_attributes = True

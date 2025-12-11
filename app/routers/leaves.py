@@ -88,7 +88,31 @@ def get_leave_balance(
         LeaveBalance.employee_id == current_employee.id,
         LeaveBalance.year == current_year
     ).all()
-    
+
+    # If no balances exist for the user this year, create sensible defaults
+    if not balances:
+        defaults = {
+            "casual": 12,
+            "sick": 10,
+            "annual": 15,
+            "personal": 5
+        }
+        for lt, total in defaults.items():
+            bal = LeaveBalance(
+                employee_id=current_employee.id,
+                leave_type=lt,
+                year=current_year,
+                total_days=total,
+                used_days=0,
+                remaining_days=total
+            )
+            db.add(bal)
+        db.commit()
+        balances = db.query(LeaveBalance).filter(
+            LeaveBalance.employee_id == current_employee.id,
+            LeaveBalance.year == current_year
+        ).all()
+
     return [LeaveBalanceResponse(
         leave_type=bal.leave_type,
         total_days=bal.total_days,
