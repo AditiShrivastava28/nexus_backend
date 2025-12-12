@@ -88,21 +88,16 @@ class EmployeeService:
         )
         db.add(salary)
         
-        # Create default leave balances
+        # Create a single default leave balance (12 days/year)
         current_year = date.today().year
-        leave_types = ["casual", "sick", "annual", "personal"]
-        default_days = {"casual": 12, "sick": 10, "annual": 15, "personal": 5}
-        
-        for leave_type in leave_types:
-            balance = LeaveBalance(
-                employee_id=employee.id,
-                leave_type=leave_type,
-                year=current_year,
-                total_days=default_days.get(leave_type, 10),
-                used_days=0,
-                remaining_days=default_days.get(leave_type, 10)
-            )
-            db.add(balance)
+        balance = LeaveBalance(
+            employee_id=employee.id,
+            year=current_year,
+            total_days=12,
+            used_days=0,
+            remaining_days=12
+        )
+        db.add(balance)
         
         db.commit()
         db.refresh(employee)

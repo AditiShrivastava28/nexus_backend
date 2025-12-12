@@ -25,8 +25,8 @@ class Request(Base):
         date: Request date or target date
         end_date: End date for multi-day requests
         amount: Amount for expense claims
-        status: Request status (pending, approved, rejected)
-        approved_by: Employee ID who approved/rejected
+        # Note: approval/status tracking removed. Approval flows are handled
+        # outside this model (or removed) and are not stored on Request.
         details: Additional JSON details
     """
     __tablename__ = "requests"
@@ -39,8 +39,8 @@ class Request(Base):
     date = Column(Date)
     end_date = Column(Date)
     amount = Column(Float)
-    status = Column(String(50), default="pending")
-    approved_by = Column(Integer, ForeignKey("employees.id"), nullable=True)
+    # status and approved_by columns removed
+    
     details = Column(Text)  # JSON string for additional details
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -48,4 +48,4 @@ class Request(Base):
     
     # Relationships
     requester = relationship("Employee", back_populates="requests", foreign_keys=[requester_id])
-    approver = relationship("Employee", foreign_keys=[approved_by])
+    # approver relationship removed

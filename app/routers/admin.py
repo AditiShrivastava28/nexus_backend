@@ -26,6 +26,8 @@ from ..schemas.document import DocumentResponse
 from ..services.employee import EmployeeService
 from ..services.auth import AuthService
 from ..utils.deps import require_admin, get_db
+from ..models.leave import LeaveBalance
+from ..schemas.leave import LeaveBalanceUpdate
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -376,6 +378,66 @@ def get_employee_assets(
         serial=asset.serial_number,
         assignedDate=asset.assigned_date
     ) for asset in assets]
+
+
+@router.get("/employees/{employee_id}/leave-balance/{year}")
+def get_leave_balance(
+    employee_id: int,
+    year: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Get leave balance for an employee for a given year (admin only)."""
+    balance = db.query(LeaveBalance).filter(
+        LeaveBalance.employee_id == employee_id,
+        LeaveBalance.year == year
+    ).first()
+    if not balance:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Leave balance not found")
+    return {
+        "total_leaves": 12,
+        "leaves_left": int(balance.remaining_days),
+        "used_leaves": int(balance.used_days)
+    }
+
+
+
+@router.put("/employees/{employee_id}/leave-balance/{year}")
+def update_leave_balance(
+    employee_id: int,
+    year: int,
+    payload: LeaveBalanceUpdate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Update total allocated leave days for an employee for a given year (admin only)."""
+    balance = db.query(LeaveBalance).filter(
+        LeaveBalance.employee_id == employee_id,
+        LeaveBalance.year == year
+    ).first()
+    # Business rule: total_days must remain 12. Reject other values.
+    if payload.total_days != 12:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="total_days must be 12")
+
+    if not balance:
+        # create new balance record with default 12
+        balance = LeaveBalance(
+            employee_id=employee_id,
+            year=year,
+            total_days=12,
+            used_days=0,
+            remaining_days=12
+        )
+        db.add(balance)
+    else:
+        # Keep total at 12 and recompute remaining
+        balance.total_days = 12
+        balance.remaining_days = max(12 - balance.used_days, 0)
+
+    db.commit()
+    db.refresh(balance)
+
+    return {"message": "Leave allocation updated", "total_days": int(balance.total_days), "remaining_days": int(balance.remaining_days)}
 
 
 @router.post("/employees/{employee_id}/assets", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)

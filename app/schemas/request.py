@@ -34,34 +34,6 @@ class WFHRequest(BaseRequest):
     reason: Optional[str] = None
 
 
-class RegularizationRequest(BaseRequest):
-    """
-    Schema for attendance regularization request.
-    
-    Attributes:
-        clock_in: Corrected clock-in time
-        clock_out: Corrected clock-out time
-        reason: Reason for regularization
-    """
-    clock_in: Optional[str] = None
-    clock_out: Optional[str] = None
-    reason: Optional[str] = None
-
-
-class ExpenseRequest(BaseRequest):
-    """
-    Schema for expense claim request.
-    
-    Attributes:
-        title: Expense title
-        amount: Expense amount
-        description: Expense description
-        description: Expense description
-    """
-    title: str
-    amount: float
-    description: Optional[str] = None
-
 
 
 class HelpRequest(BaseRequest):
@@ -78,9 +50,8 @@ class HelpRequest(BaseRequest):
 
 class LeaveRequest(BaseRequest):
     """
-    Schema for applying leaves. Inherits from BaseRequest and adds leave_type and reason.
+    Schema for applying leaves. Inherits from BaseRequest and adds reason.
     """
-    leave_type: Optional[str] = "casual"
     reason: Optional[str] = None
 
 
@@ -94,7 +65,6 @@ class RequestResponse(BaseModel):
         title: Request title
         description: Description
         date: Request date
-        status: Request status
         amount: Amount (for expenses)
         created_at: Creation timestamp
     """
@@ -103,7 +73,6 @@ class RequestResponse(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     date: Optional[date] = None
-    status: str
     amount: Optional[float] = None
     created_at: Optional[datetime] = None
     # Total days applied (if applicable)

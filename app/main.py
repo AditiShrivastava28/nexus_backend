@@ -273,26 +273,17 @@ def seed_initial_data():
         )
         db.add(emp_salary)
         
-        # Create leave balances for all employees
+        # Create a single leave balance (12 days/year) for all employees
         current_year = date.today().year
-        leave_types = [
-            ("casual", 12),
-            ("sick", 10),
-            ("annual", 15),
-            ("personal", 5)
-        ]
-        
         for emp in [admin_employee, manager_employee, sample_employee]:
-            for leave_type, days in leave_types:
-                balance = LeaveBalance(
-                    employee_id=emp.id,
-                    leave_type=leave_type,
-                    year=current_year,
-                    total_days=days,
-                    used_days=0,
-                    remaining_days=days
-                )
-                db.add(balance)
+            balance = LeaveBalance(
+                employee_id=emp.id,
+                year=current_year,
+                total_days=12,
+                used_days=0,
+                remaining_days=12
+            )
+            db.add(balance)
         
         # Create sample payslips
         for emp in [admin_employee, manager_employee, sample_employee]:
