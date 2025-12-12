@@ -12,6 +12,7 @@ from sqlalchemy.sql import func
 from ..database import Base
 
 
+
 class Leave(Base):
     """
     Leave request model.
@@ -22,6 +23,8 @@ class Leave(Base):
         start_date: Leave start date
         end_date: Leave end date
         days: Number of leave days
+        half_day: Whether this is a half-day leave
+        half_day_type: Type of half-day leave ('first_half' or 'second_half')
         reason: Reason for leave
             # Approval/status tracking removed from this model.
     """
@@ -39,6 +42,9 @@ class Leave(Base):
     # Unpaid leaves are not deducted from the paid balance.
     leave_type = Column(String, nullable=False)
     reason = Column(Text)
+    # Half-day leave support
+    half_day = Column(String, default="false")  # Store as string for SQLite compatibility
+    half_day_type = Column(String, nullable=True)  # 'first_half' or 'second_half' when half_day is true
     # Note: simple leave record with dates and days. Approval/status is not tracked here.
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

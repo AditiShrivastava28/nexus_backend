@@ -1,8 +1,9 @@
+
 """
 Request management model.
 
 This module defines the Request model for handling various employee
-requests (WFH, regularization, expense, help tickets).
+requests (WFH, regularization, help tickets).
 """
 
 from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, Float
@@ -14,17 +15,16 @@ from ..database import Base
 
 class Request(Base):
     """
-    Employee request model (WFH, expense, help, regularization).
+    Employee request model (WFH, help, regularization).
     
     Attributes:
         id: Primary key
         requester_id: Foreign key to Employee who made request
-        request_type: Type of request (wfh, expense, help, regularization)
+        request_type: Type of request (wfh, help, regularization)
         title: Request title
         description: Detailed description
         date: Request date or target date
         end_date: End date for multi-day requests
-        amount: Amount for expense claims
         # Note: approval/status tracking removed. Approval flows are handled
         # outside this model (or removed) and are not stored on Request.
         details: Additional JSON details
@@ -38,7 +38,6 @@ class Request(Base):
     description = Column(Text)
     date = Column(Date)
     end_date = Column(Date)
-    amount = Column(Float)
     # status and approved_by columns removed
     
     details = Column(Text)  # JSON string for additional details

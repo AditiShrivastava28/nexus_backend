@@ -44,6 +44,7 @@ def get_leaves_calendar(
         Leave.end_date >= start_of_month
     ).all()
     
+
     result = []
     for leave in leaves:
         # Get employee name
@@ -58,10 +59,14 @@ def get_leaves_calendar(
             id=leave.id,
             employee_name=employee_name,
             start_date=leave.start_date,
-            end_date=leave.end_date
+            end_date=leave.end_date,
+            leave_type=leave.leave_type,
+            half_day=leave.half_day == "true" if leave.half_day else False,
+            half_day_type=leave.half_day_type
         ))
     
     return result
+
 
 
 @router.get("/balance", response_model=LeaveBalanceResponse)
@@ -81,53 +86,64 @@ def get_leave_balance(
     """
     current_year = date.today().year
     
-    # There is a single leave balance per employee per year
-    bal = db.query(LeaveBalance).filter(
-        LeaveBalance.employee_id == current_employee.id,
-        LeaveBalance.year == current_year
-    ).first()
+    try:
+        # There is a single leave balance per employee per year
+        bal = db.query(LeaveBalance).filter(
+            LeaveBalance.employee_id == current_employee.id,
+            LeaveBalance.year == current_year
+        ).first()
 
-    # compute used days from actual Leave records overlapping the year
-    start_of_year = date(current_year, 1, 1)
-    end_of_year = date(current_year, 12, 31)
-    # Only paid leaves count against the paid balance
-    leaves = db.query(Leave).filter(
-        Leave.employee_id == current_employee.id,
-        Leave.end_date >= start_of_year,
-        Leave.start_date <= end_of_year,
-        Leave.leave_type == "paid"
-    ).all()
+        # compute used days from actual Leave records overlapping the year
+        start_of_year = date(current_year, 1, 1)
+        end_of_year = date(current_year, 12, 31)
+        # Only paid leaves count against the paid balance
+        leaves = db.query(Leave).filter(
+            Leave.employee_id == current_employee.id,
+            Leave.end_date >= start_of_year,
+            Leave.start_date <= end_of_year,
+            Leave.leave_type == "paid"
+        ).all()
 
-    used_sum = 0.0
-    for l in leaves:
-        try:
-            used_sum += float(l.days or 0)
-        except Exception:
-            continue
+        used_sum = 0.0
+        for l in leaves:
+            try:
+                used_sum += float(l.days or 0)
+            except Exception:
+                continue
 
-    # If no balance exists for the user this year, create a default of 12 days
-    if not bal:
-        bal = LeaveBalance(
-            employee_id=current_employee.id,
-            year=current_year,
-            total_days=12,
-            used_days=used_sum,
-            remaining_days=max(12 - used_sum, 0)
+        # If no balance exists for the user this year, create a default of 12 days
+        if not bal:
+            bal = LeaveBalance(
+                employee_id=current_employee.id,
+                year=current_year,
+                total_days=12,
+                used_days=used_sum,
+                remaining_days=max(12 - used_sum, 0)
+            )
+            db.add(bal)
+            db.commit()
+            db.refresh(bal)
+        else:
+            # update balance from computed used_sum
+            bal.used_days = used_sum
+            bal.remaining_days = max(bal.total_days - used_sum, 0)
+            db.commit()
+
+        return LeaveBalanceResponse(
+            total_days=float(bal.total_days),
+            used_days=float(bal.used_days),
+            remaining_days=float(bal.remaining_days)
         )
-        db.add(bal)
-    else:
-        # update balance from computed used_sum
-        bal.used_days = used_sum
-        bal.remaining_days = max(bal.total_days - used_sum, 0)
+    except Exception as e:
+        # In case of any error, return default values
+        db.rollback()
+        return LeaveBalanceResponse(
+            total_days=12.0,
+            used_days=0.0,
+            remaining_days=12.0
+        )
 
-    db.commit()
-    db.refresh(bal)
 
-    return LeaveBalanceResponse(
-        total_days=float(bal.total_days),
-        used_days=float(bal.used_days),
-        remaining_days=float(bal.remaining_days)
-    )
 
 
 @router.get("/history", response_model=List[LeaveResponse])
@@ -141,5 +157,25 @@ def get_leave_history(
     Returns:
         List[LeaveResponse]: list of leave records with dates, type and reason
     """
-    leaves = db.query(Leave).filter(Leave.employee_id == current_employee.id).order_by(Leave.start_date.desc()).all()
-    return leaves
+    try:
+        # Get all leave records for the employee, ordered by start date (most recent first)
+        leaves = db.query(Leave).filter(Leave.employee_id == current_employee.id).order_by(Leave.start_date.desc()).all()
+        
+        # Convert leaves to response format with half-day support
+        result = []
+        for leave in leaves:
+            result.append(LeaveResponse(
+                id=leave.id,
+                start_date=leave.start_date,
+                end_date=leave.end_date,
+                days=leave.days,
+                reason=leave.reason,
+                leave_type=leave.leave_type,
+                half_day=leave.half_day == "true" if leave.half_day else False,
+                half_day_type=leave.half_day_type
+            ))
+        
+        return result
+    except Exception as e:
+        # In case of any error, return empty list
+        return []

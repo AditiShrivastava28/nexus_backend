@@ -88,16 +88,25 @@ class EmployeeService:
         )
         db.add(salary)
         
-        # Create a single default leave balance (12 days/year)
+
+        # Create a single default leave balance (12 days/year) for current year
         current_year = date.today().year
-        balance = LeaveBalance(
-            employee_id=employee.id,
-            year=current_year,
-            total_days=12,
-            used_days=0,
-            remaining_days=12
-        )
-        db.add(balance)
+        
+        # Check if balance already exists for this year (to avoid duplicates)
+        existing_balance = db.query(LeaveBalance).filter(
+            LeaveBalance.employee_id == employee.id,
+            LeaveBalance.year == current_year
+        ).first()
+        
+        if not existing_balance:
+            balance = LeaveBalance(
+                employee_id=employee.id,
+                year=current_year,
+                total_days=12,
+                used_days=0,
+                remaining_days=12
+            )
+            db.add(balance)
         
         db.commit()
         db.refresh(employee)

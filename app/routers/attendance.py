@@ -26,13 +26,15 @@ from ..utils.deps import get_current_employee
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
 
-def calculate_hours(clock_in: datetime, clock_out: datetime) -> str:
+
+def calculate_hours(clock_in: datetime, clock_out: datetime, breaks: List[Break] = None) -> str:
     """
-    Calculate total working hours between clock-in and clock-out.
+    Calculate total working hours between clock-in and clock-out, subtracting break time.
     
     Args:
         clock_in: Clock-in timestamp
         clock_out: Clock-out timestamp
+        breaks: List of Break objects to subtract from total time
         
     Returns:
         str: Formatted hours string (e.g., "8h 30m")
@@ -54,8 +56,24 @@ def calculate_hours(clock_in: datetime, clock_out: datetime) -> str:
     co = _normalize(clock_out)
 
     diff = co - ci
-    hours = int(diff.total_seconds() // 3600)
-    minutes = int((diff.total_seconds() % 3600) // 60)
+    
+
+    # Calculate total break time in minutes
+    total_break_minutes = 0
+    if breaks:
+        for break_obj in breaks:
+            if break_obj.duration_minutes:
+                total_break_minutes += break_obj.duration_minutes
+    
+    # Convert total work time to minutes, subtract break time
+    total_minutes = int(diff.total_seconds() // 60)
+    net_minutes = total_minutes - total_break_minutes
+    
+    if net_minutes < 0:
+        net_minutes = 0  # In case of data inconsistency
+    
+    hours = net_minutes // 60
+    minutes = net_minutes % 60
     return f"{hours}h {minutes}m"
 
 
@@ -94,6 +112,7 @@ def get_today_attendance(
             is_on_break=False
         )
     
+
     # Check if currently on break
     is_on_break = any(
         b.end_time is None for b in attendance.breaks
@@ -106,13 +125,21 @@ def get_today_attendance(
         duration_minutes=b.duration_minutes
     ) for b in attendance.breaks]
     
+    # Calculate total hours if clocked out and total_hours is not set or is "0h 0m"
+    total_hours = attendance.total_hours
+    if attendance.clock_in and attendance.clock_out and (not total_hours or total_hours == "0h 0m"):
+        total_hours = calculate_hours(attendance.clock_in, attendance.clock_out, attendance.breaks)
+        # Update the database
+        attendance.total_hours = total_hours
+        db.commit()
+    
     return AttendanceResponse(
         id=attendance.id,
         date=attendance.date,
         clock_in=attendance.clock_in,
         clock_out=attendance.clock_out,
         status=attendance.status,
-        total_hours=attendance.total_hours,
+        total_hours=total_hours,
         breaks=breaks,
         is_on_break=is_on_break
     )
@@ -234,8 +261,11 @@ def clock_out(
             diff = now - active_break.start_time
         active_break.duration_minutes = int(diff.total_seconds() // 60)
     
+
     attendance.clock_out = now
-    attendance.total_hours = calculate_hours(attendance.clock_in, now)
+    # Get all breaks for this attendance to calculate total working time
+    attendance_breaks = db.query(Break).filter(Break.attendance_id == attendance.id).all()
+    attendance.total_hours = calculate_hours(attendance.clock_in, now, attendance_breaks)
     
     db.commit()
     db.refresh(attendance)
@@ -371,6 +401,7 @@ def end_break(
     )
 
 
+
 @router.get("/logs", response_model=List[AttendanceResponse])
 def get_attendance_logs(
     start_date: date | None = None,
@@ -450,6 +481,7 @@ def get_attendance_logs(
             ))
             continue
 
+
         is_on_break = any(b.end_time is None for b in attendance.breaks)
         breaks = [BreakResponse(
             id=b.id,
@@ -460,7 +492,7 @@ def get_attendance_logs(
 
         total_hours = attendance.total_hours
         if not total_hours and attendance.clock_in and attendance.clock_out:
-            total_hours = calculate_hours(attendance.clock_in, attendance.clock_out)
+            total_hours = calculate_hours(attendance.clock_in, attendance.clock_out, attendance.breaks)
 
         result.append(AttendanceResponse(
             id=attendance.id,
@@ -473,4 +505,57 @@ def get_attendance_logs(
             is_on_break=is_on_break
         ))
 
+    return result
+
+
+@router.get("/history", response_model=List[AttendanceResponse])
+def get_attendance_history(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get full attendance history for the current user.
+    
+    Returns:
+        List[AttendanceResponse]: List of all attendance records
+    """
+    records = db.query(Attendance).filter(
+        Attendance.employee_id == current_employee.id
+    ).order_by(Attendance.date.desc()).all()
+    
+    result = []
+    for attendance in records:
+        is_on_break = any(b.end_time is None for b in attendance.breaks)
+        breaks = [BreakResponse(
+            id=b.id,
+            start_time=b.start_time,
+            end_time=b.end_time,
+            duration_minutes=b.duration_minutes
+        ) for b in attendance.breaks]
+
+
+        # Always re-calculate total_hours if clock_in and clock_out are present
+        total_hours = attendance.total_hours
+        if attendance.clock_in and attendance.clock_out:
+            calculated_hours = calculate_hours(attendance.clock_in, attendance.clock_out, attendance.breaks)
+            # If database value is missing or "0h 0m", update it with calculated value
+            if not total_hours or total_hours == "0h 0m":
+                total_hours = calculated_hours
+                attendance.total_hours = total_hours
+                db.add(attendance) # Stage for update
+
+        result.append(AttendanceResponse(
+            id=attendance.id,
+            date=attendance.date,
+            clock_in=attendance.clock_in,
+            clock_out=attendance.clock_out,
+            status=attendance.status,
+            total_hours=total_hours,
+            breaks=breaks,
+            is_on_break=is_on_break
+        ))
+    
+    # Commit any updates to total_hours
+    db.commit()
+    
     return result

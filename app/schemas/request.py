@@ -1,8 +1,9 @@
+
 """
 Request-related Pydantic schemas.
 
 This module defines schemas for various employee requests
-(WFH, expense, help, regularization).
+(WFH, help, regularization).
 """
 
 from pydantic import BaseModel
@@ -24,13 +25,39 @@ class BaseRequest(BaseModel):
     total: int
 
 
-class WFHRequest(BaseRequest):
+
+class WFHRequest(BaseModel):
     """
     Schema for WFH request.
     
     Attributes:
+        start_date: Start date for WFH
+        end_date: End date for WFH
         reason: Reason for WFH
     """
+    start_date: date
+    end_date: date
+    reason: Optional[str] = None
+
+
+
+class WFHApplyResponse(BaseModel):
+    """
+    Response schema for WFH application.
+    """
+    msg: str
+    start_date: date
+    end_date: date
+    number_of_days_applied_for: int
+
+
+class WFHHistoryItem(BaseModel):
+    """
+    Schema for WFH history item.
+    """
+    start_date: date
+    end_date: date
+    number_of_days: int
     reason: Optional[str] = None
 
 
@@ -55,6 +82,7 @@ class LeaveRequest(BaseRequest):
     reason: Optional[str] = None
 
 
+
 class RequestResponse(BaseModel):
     """
     Request response schema.
@@ -65,7 +93,6 @@ class RequestResponse(BaseModel):
         title: Request title
         description: Description
         date: Request date
-        amount: Amount (for expenses)
         created_at: Creation timestamp
     """
     id: int
@@ -73,7 +100,6 @@ class RequestResponse(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     date: Optional[date] = None
-    amount: Optional[float] = None
     created_at: Optional[datetime] = None
     # Total days applied (if applicable)
     total_days: Optional[int] = None
