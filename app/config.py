@@ -21,7 +21,7 @@ class Settings:
     """
     
     # Database configuration
-    DATABASE_URL: str = "postgresql://nexushr_user:hrm@localhost:5432/nexushr_db"
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
     
     # JWT configuration
     SECRET_KEY: str = os.getenv("SESSION_SECRET", "nexushr-secret-key")
