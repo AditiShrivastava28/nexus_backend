@@ -6,12 +6,14 @@ This module defines schemas for various employee requests
 (WFH, help, regularization).
 """
 
-from pydantic import BaseModel
-from typing import Optional
-from datetime import date, datetime
 
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import date, datetime
+from enum import Enum
 
 class BaseRequest(BaseModel):
+
     """
     Base request fields required for all request types.
 
@@ -51,6 +53,7 @@ class WFHApplyResponse(BaseModel):
     number_of_days_applied_for: int
 
 
+
 class WFHHistoryItem(BaseModel):
     """
     Schema for WFH history item.
@@ -61,21 +64,80 @@ class WFHHistoryItem(BaseModel):
     reason: Optional[str] = None
 
 
+class HelpCategory(str, Enum):
+    IT_SUPPORT = "IT Support"
+    HR_QUERY = "HR Query"
+    PAYROLL = "Payroll"
+    ADMIN_FACILITIES = "Admin/Facilities"
+    OTHER = "Other"
 
 
-class HelpRequest(BaseRequest):
+class HelpRequest(BaseModel):
     """
     Schema for help ticket.
     
     Attributes:
-        title: Ticket title
-        description: Issue description
+        subject: Ticket subject
+        message_body: Ticket message body
+        category: Ticket category
+        recipients: List of recipient employee IDs
     """
-    title: str
-    description: str
+    subject: str
+    message_body: str
+    category: HelpCategory
+    recipients: List[int]
+
+
+class HelpTicketResponse(BaseModel):
+    """
+    Response schema for help ticket.
+    
+    Attributes:
+        message: Success message
+        recipients: List of recipient names
+        date: Date of the ticket
+        category: Ticket category
+    """
+    message: str
+    recipients: List[str]
+    date: date
+    category: HelpCategory
+
+
+
+class EarlyLateType(str, Enum):
+    EARLY_GOING = "early_going"
+    LATE_COMING = "late_coming"
+
+
+class EarlyLateRequest(BaseModel):
+    """
+    Schema for Early Going / Late Coming request.
+    
+
+    Attributes:
+        date: Date of the request
+        type: Type (early_going or late_coming)
+        reason: Reason
+        duration: Duration in hours (e.g., 1.5)
+    """
+    date: date
+    type: EarlyLateType
+    reason: str
+    duration: float
+
+
+class EarlyLateResponse(BaseModel):
+
+    """
+    Response schema for Early/Late request.
+    """
+    message: str
+    remaining_quota: int
 
 
 class LeaveRequest(BaseRequest):
+
     """
     Schema for applying leaves. Inherits from BaseRequest and adds reason.
     """

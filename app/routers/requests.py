@@ -11,23 +11,32 @@ from datetime import date
 import json
 
 from ..database import get_db
+
 from ..models.employee import Employee
 from ..models.request import Request
+from ..models.user import User, UserRole
 
 
 from typing import List
+
+
 from ..schemas.request import (
     WFHRequest,
     HelpRequest,
     RequestResponse,
     WFHApplyResponse,
-    WFHHistoryItem
+    WFHHistoryItem,
+    HelpTicketResponse,
+    EarlyLateRequest,
+    EarlyLateResponse
 )
 from ..schemas.leave import LeaveRequest, LeaveApplyResponse
+
 from ..utils.deps import get_current_employee
 
 
 router = APIRouter(prefix="/requests", tags=["Requests"])
+
 
 
 @router.get("/wfh", response_model=List[WFHHistoryItem])
@@ -260,7 +269,8 @@ def apply_leave(
 
 
 
-@router.post("/help", response_model=RequestResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post("/help", response_model=HelpTicketResponse, status_code=status.HTTP_201_CREATED)
 def raise_help_ticket(
     help_data: HelpRequest,
     current_employee: Employee = Depends(get_current_employee),
@@ -275,28 +285,133 @@ def raise_help_ticket(
         db: Database session
         
     Returns:
-        RequestResponse: Created request
+        HelpTicketResponse: Created request
     """
+
+    from datetime import date
+    
+    # Auto-generate date
+    today = date.today()
+    
+    # Get all admins
+    admins = db.query(Employee).join(User).filter(User.role == UserRole.ADMIN.value).all()
+    admin_ids = [admin.id for admin in admins]
+    
+    # Merge provided recipients with admins (ensure uniqueness)
+    final_recipient_ids = set(help_data.recipients) if help_data.recipients else set()
+    final_recipient_ids.update(admin_ids)
+    
+    # Fetch recipient names
+    recipient_names = []
+    if final_recipient_ids:
+        recipients = db.query(Employee).filter(Employee.id.in_(final_recipient_ids)).all()
+        # Create a map for order preservation or just list them
+        # We need to access the associated User to get full_name
+        for recipient in recipients:
+            if recipient.user:
+                recipient_names.append(recipient.user.full_name)
+    
     request = Request(
         requester_id=current_employee.id,
         request_type="help",
-        title=help_data.title,
-        description=help_data.description,
-        date=help_data.from_date,
-        end_date=help_data.end_date,
-        details=json.dumps({"total": help_data.total})
+        title=help_data.subject,
+        description=help_data.message_body,
+        date=today,
+        # help tickets don't necessarily have an end_date in this new format, 
+        # but the model might require it or it can be nullable. 
+
+        # Assuming end_date is nullable or we can set it to same day.
+        end_date=today, 
+        details=json.dumps({
+            "recipients": list(final_recipient_ids),
+            "category": help_data.category.value
+        })
     )
     db.add(request)
+
     db.commit()
     db.refresh(request)
     
-    return RequestResponse(
-        id=request.id,
-        request_type=request.request_type,
-        title=request.title,
-        description=request.description,
-        date=request.date,
-        created_at=request.created_at,
-        total_days=help_data.total,
-        message="Request sent"
+    return HelpTicketResponse(
+        message="Ticket sent successfully",
+        recipients=recipient_names,
+        date=today,
+        category=help_data.category
     )
+
+
+
+@router.post("/early-late", response_model=EarlyLateResponse, status_code=status.HTTP_201_CREATED)
+def request_early_late(
+    request_data: EarlyLateRequest,
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Request Early Going or Late Coming.
+    Limit: 2 requests per month.
+    
+    Args:
+        request_data: Request details
+        current_employee: User's employee profile
+        db: Database session
+        
+    Returns:
+        EarlyLateResponse: Status and remaining quota
+    """
+    from datetime import date
+    import calendar
+    
+    # Calculate month range
+    today = date.today()
+    req_date = request_data.date
+    
+    # Validation: Cannot request for past months (optional, but good practice)
+    # Ensure req_date is within current month or future? 
+    # User requirement is just "2 days allowed in a month". 
+    # We will check the count for the month of the requested date.
+    
+    start_of_month = date(req_date.year, req_date.month, 1)
+    last_day = calendar.monthrange(req_date.year, req_date.month)[1]
+    end_of_month = date(req_date.year, req_date.month, last_day)
+    
+    # Check count of existing requests for this month
+    # We use request_type="early_late"
+    existing_count = db.query(Request).filter(
+        Request.requester_id == current_employee.id,
+        Request.request_type == "early_late",
+        Request.date >= start_of_month,
+        Request.date <= end_of_month
+    ).count()
+    
+    if existing_count >= 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Monthly limit of 2 Early Going / Late Coming requests reached for this month."
+        )
+        
+    # Create request
+
+    request = Request(
+        requester_id=current_employee.id,
+        request_type="early_late",
+        title=f"{request_data.type.replace('_', ' ').title()} Request",
+        description=request_data.reason,
+        date=request_data.date,
+        end_date=request_data.date,
+        details=json.dumps({
+            "type": request_data.type,
+            "duration": request_data.duration
+        })
+    )
+    db.add(request)
+
+    db.commit()
+    db.refresh(request)
+    
+    return EarlyLateResponse(
+        message=f"{request_data.type.replace('_', ' ').title()} request submitted successfully",
+        remaining_quota=2 - (existing_count + 1)
+    )
+
+
