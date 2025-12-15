@@ -70,13 +70,15 @@ def migrate_leave_balances():
                         except (ValueError, TypeError):
                             continue
             
+
             # Create the balance
             balance = LeaveBalance(
                 employee_id=employee.id,
                 year=current_year,
                 total_days=12,
                 used_days=used_days,
-                remaining_days=max(12 - used_days, 0)
+                remaining_days=max(12 - used_days, 0),
+                leave_type="paid"  # Default to paid leave balance
             )
             db.add(balance)
             created_balances += 1

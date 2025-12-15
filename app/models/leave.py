@@ -53,6 +53,7 @@ class Leave(Base):
     employee = relationship("Employee", back_populates="leaves", foreign_keys=[employee_id])
 
 
+
 class LeaveBalance(Base):
     """
     Leave balance for each employee for a given year.
@@ -64,6 +65,7 @@ class LeaveBalance(Base):
         total_days: Total allocated days
         used_days: Days already used
         remaining_days: Days remaining
+        leave_type: Type of leave balance (e.g., 'paid', 'unpaid')
     """
     __tablename__ = "leave_balances"
     
@@ -75,6 +77,8 @@ class LeaveBalance(Base):
     total_days = Column(Float, default=12)
     used_days = Column(Float, default=0)
     remaining_days = Column(Float, default=12)
+    # Leave type for the balance (default to 'paid' as this is the main balance type)
+    leave_type = Column(String, default="paid", nullable=False)
     
     # Relationships
     employee = relationship("Employee", back_populates="leave_balances")

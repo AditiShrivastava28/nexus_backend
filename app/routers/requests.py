@@ -172,13 +172,15 @@ def apply_leave(
         LeaveBalance.employee_id == current_employee.id,
         LeaveBalance.year == current_year
     ).first()
+
     if not balance:
         balance = LeaveBalance(
             employee_id=current_employee.id,
             year=current_year,
             total_days=12,
             used_days=0,
-            remaining_days=12
+            remaining_days=12,
+            leave_type="paid"  # Default to paid leave balance
         )
         db.add(balance)
         db.commit()

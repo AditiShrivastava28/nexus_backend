@@ -98,13 +98,15 @@ class EmployeeService:
             LeaveBalance.year == current_year
         ).first()
         
+
         if not existing_balance:
             balance = LeaveBalance(
                 employee_id=employee.id,
                 year=current_year,
                 total_days=12,
                 used_days=0,
-                remaining_days=12
+                remaining_days=12,
+                leave_type="paid"  # Default to paid leave balance
             )
             db.add(balance)
         

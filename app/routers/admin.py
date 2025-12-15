@@ -419,6 +419,7 @@ def update_leave_balance(
     if payload.total_days != 12:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="total_days must be 12")
 
+
     if not balance:
         # create new balance record with default 12
         balance = LeaveBalance(
@@ -426,7 +427,8 @@ def update_leave_balance(
             year=year,
             total_days=12,
             used_days=0,
-            remaining_days=12
+            remaining_days=12,
+            leave_type="paid"  # Default to paid leave balance
         )
         db.add(balance)
     else:

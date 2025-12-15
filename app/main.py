@@ -273,6 +273,7 @@ def seed_initial_data():
         )
         db.add(emp_salary)
         
+
         # Create a single leave balance (12 days/year) for all employees
         current_year = date.today().year
         for emp in [admin_employee, manager_employee, sample_employee]:
@@ -281,7 +282,8 @@ def seed_initial_data():
                 year=current_year,
                 total_days=12,
                 used_days=0,
-                remaining_days=12
+                remaining_days=12,
+                leave_type="paid"  # Default to paid leave balance
             )
             db.add(balance)
         

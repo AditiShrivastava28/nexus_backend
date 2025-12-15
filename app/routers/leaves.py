@@ -111,6 +111,7 @@ def get_leave_balance(
             except Exception:
                 continue
 
+
         # If no balance exists for the user this year, create a default of 12 days
         if not bal:
             bal = LeaveBalance(
@@ -118,7 +119,8 @@ def get_leave_balance(
                 year=current_year,
                 total_days=12,
                 used_days=used_sum,
-                remaining_days=max(12 - used_sum, 0)
+                remaining_days=max(12 - used_sum, 0),
+                leave_type="paid"  # Default to paid leave balance
             )
             db.add(bal)
             db.commit()
