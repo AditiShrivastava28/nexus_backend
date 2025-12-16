@@ -10,9 +10,15 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
 
+
 from ..database import get_db
 from ..models.user import User
 from ..models.employee import Employee
+from ..models.attendance import Attendance
+from ..models.leave import Leave, LeaveBalance
+from ..models.request import Request
+from ..models.message import Message
+
 
 from ..schemas.employee import (
     EmployeeCreate, 
@@ -21,6 +27,16 @@ from ..schemas.employee import (
     EmployeeProfile,
     EmployeeStatusUpdate,
     ManagerInfo
+)
+from ..schemas.admin import (
+    AttendanceHistoryResponse,
+    WFHHistoryResponse,
+    LeaveHistoryResponse,
+    EarlyLateHistoryResponse,
+    HelpTicketsHistoryResponse,
+    CompleteLogHistoryResponse,
+    EmployeeLogFilters,
+    LogHistoryType
 )
 from ..services.employee import EmployeeService
 from ..utils.deps import get_current_user
@@ -556,7 +572,769 @@ def delete_employee_admin(
             detail="Cannot delete employee who has team members. Reassign team members first."
         )
     
+
     # Delete employee
     EmployeeService.delete_employee(db, employee)
     
     return {"message": "Employee deleted successfully"}
+
+
+# Employee Log History Endpoints
+
+@router.get("/employees/{employee_id}/attendance-history", response_model=AttendanceHistoryResponse)
+def get_employee_attendance_history(
+    employee_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get employee attendance history (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+        skip: Number of records to skip
+        limit: Maximum number of records
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        AttendanceHistoryResponse: Employee attendance history
+        
+    Raises:
+        HTTPException: 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    # Verify employee exists
+    employee = EmployeeService.get_employee_by_id(db, employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    # Build query for attendance history
+    query = db.query(Attendance).filter(Attendance.employee_id == employee_id)
+    
+    # Apply date filters
+    if start_date:
+        query = query.filter(Attendance.date >= start_date)
+    if end_date:
+        query = query.filter(Attendance.date <= end_date)
+    
+    # Apply pagination
+    total_records = query.count()
+    attendance_records = query.order_by(Attendance.date.desc()).offset(skip).limit(limit).all()
+    
+    # Convert to response format
+    attendance_data = []
+    for record in attendance_records:
+        attendance_data.append({
+            "date": record.date,
+            "clock_in": record.clock_in,
+            "clock_out": record.clock_out,
+            "status": record.status,
+            "total_hours": record.total_hours,
+            "notes": record.notes,
+            "created_at": record.created_at
+        })
+    
+    # Calculate summary statistics
+    total_attendance_records = db.query(Attendance).filter(Attendance.employee_id == employee_id).count()
+    present_days = db.query(Attendance).filter(
+        Attendance.employee_id == employee_id,
+        Attendance.status == "present"
+    ).count()
+    wfh_days = db.query(Attendance).filter(
+        Attendance.employee_id == employee_id,
+        Attendance.status == "wfh"
+    ).count()
+    absent_days = db.query(Attendance).filter(
+        Attendance.employee_id == employee_id,
+        Attendance.status == "absent"
+    ).count()
+    
+    summary = {
+        "total_records": total_attendance_records,
+        "present_days": present_days,
+        "wfh_days": wfh_days,
+        "absent_days": absent_days,
+        "attendance_rate": round((present_days / total_attendance_records * 100) if total_attendance_records > 0 else 0, 2)
+    }
+    
+    return AttendanceHistoryResponse(
+        employee_id=employee_id,
+        employee_name=employee.user.full_name if employee.user else "Unknown",
+        total_records=total_records,
+        attendance_data=attendance_data,
+        summary=summary
+    )
+
+
+@router.get("/employees/{employee_id}/wfh-history", response_model=WFHHistoryResponse)
+def get_employee_wfh_history(
+    employee_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get employee WFH history (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+        skip: Number of records to skip
+        limit: Maximum number of records
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        WFHHistoryResponse: Employee WFH history
+        
+    Raises:
+        HTTPException: 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    # Verify employee exists
+    employee = EmployeeService.get_employee_by_id(db, employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    # Build query for WFH requests
+    query = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "wfh"
+    )
+    
+    # Apply date filters
+    if start_date:
+        query = query.filter(Request.date >= start_date)
+    if end_date:
+        query = query.filter(Request.date <= end_date)
+    
+    # Apply pagination
+    total_records = query.count()
+    wfh_records = query.order_by(Request.created_at.desc()).offset(skip).limit(limit).all()
+    
+    # Convert to response format
+    wfh_data = []
+    for record in wfh_records:
+        # Calculate days between start and end date
+        days = 1
+        if record.date and record.end_date:
+            days = (record.end_date - record.date).days + 1
+        
+        wfh_data.append({
+            "id": record.id,
+            "start_date": record.date,
+            "end_date": record.end_date,
+            "days": days,
+            "reason": record.description,
+            "created_at": record.created_at
+        })
+    
+    # Calculate summary statistics
+    total_wfh_requests = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "wfh"
+    ).count()
+    
+    total_wfh_days = sum(record.days for record in db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "wfh"
+    ).all())
+    
+    summary = {
+        "total_requests": total_wfh_requests,
+        "total_wfh_days": total_wfh_days,
+        "average_days_per_request": round(total_wfh_days / total_wfh_requests, 2) if total_wfh_requests > 0 else 0
+    }
+    
+    return WFHHistoryResponse(
+        employee_id=employee_id,
+        employee_name=employee.user.full_name if employee.user else "Unknown",
+        total_requests=total_records,
+        wfh_data=wfh_data,
+        summary=summary
+    )
+
+
+@router.get("/employees/{employee_id}/leave-history", response_model=LeaveHistoryResponse)
+def get_employee_leave_history(
+    employee_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get employee leave history (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+        skip: Number of records to skip
+        limit: Maximum number of records
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        LeaveHistoryResponse: Employee leave history
+        
+    Raises:
+        HTTPException: 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    # Verify employee exists
+    employee = EmployeeService.get_employee_by_id(db, employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    # Build query for leave history
+    query = db.query(Leave).filter(Leave.employee_id == employee_id)
+    
+    # Apply date filters
+    if start_date:
+        query = query.filter(Leave.start_date >= start_date)
+    if end_date:
+        query = query.filter(Leave.end_date <= end_date)
+    
+    # Apply pagination
+    total_records = query.count()
+    leave_records = query.order_by(Leave.created_at.desc()).offset(skip).limit(limit).all()
+    
+    # Convert to response format
+    leave_data = []
+    for record in leave_records:
+        leave_data.append({
+            "id": record.id,
+            "start_date": record.start_date,
+            "end_date": record.end_date,
+            "days": record.days,
+            "leave_type": record.leave_type,
+            "reason": record.reason,
+            "half_day": record.half_day == "true" if record.half_day else False,
+            "half_day_type": record.half_day_type,
+            "created_at": record.created_at
+        })
+    
+    # Calculate summary statistics
+    total_leaves = db.query(Leave).filter(Leave.employee_id == employee_id).count()
+    paid_leaves = db.query(Leave).filter(
+        Leave.employee_id == employee_id,
+        Leave.leave_type == "paid"
+    ).count()
+    unpaid_leaves = db.query(Leave).filter(
+        Leave.employee_id == employee_id,
+        Leave.leave_type == "unpaid"
+    ).count()
+    
+    total_leave_days = sum(record.days for record in db.query(Leave).filter(
+        Leave.employee_id == employee_id
+    ).all())
+    
+    summary = {
+        "total_leave_requests": total_leaves,
+        "paid_leaves": paid_leaves,
+        "unpaid_leaves": unpaid_leaves,
+        "total_leave_days": total_leave_days,
+        "average_days_per_request": round(total_leave_days / total_leaves, 2) if total_leaves > 0 else 0
+    }
+    
+    # Get current leave balance
+    current_year = date.today().year
+    leave_balance = db.query(LeaveBalance).filter(
+        LeaveBalance.employee_id == employee_id,
+        LeaveBalance.year == current_year
+    ).first()
+    
+    current_balance = {
+        "total_days": leave_balance.total_days if leave_balance else 12,
+        "used_days": leave_balance.used_days if leave_balance else 0,
+        "remaining_days": leave_balance.remaining_days if leave_balance else 12,
+        "year": current_year
+    }
+    
+    return LeaveHistoryResponse(
+        employee_id=employee_id,
+        employee_name=employee.user.full_name if employee.user else "Unknown",
+        total_leaves=total_records,
+        leave_data=leave_data,
+        summary=summary,
+        current_balance=current_balance
+    )
+
+
+@router.get("/employees/{employee_id}/early-late-history", response_model=EarlyLateHistoryResponse)
+def get_employee_early_late_history(
+    employee_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get employee early/late history (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+        skip: Number of records to skip
+        limit: Maximum number of records
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        EarlyLateHistoryResponse: Employee early/late history
+        
+    Raises:
+        HTTPException: 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    # Verify employee exists
+    employee = EmployeeService.get_employee_by_id(db, employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    # Build query for early/late requests
+    query = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type.in_(["early_going", "late_coming"])
+    )
+    
+    # Apply date filters
+    if start_date:
+        query = query.filter(Request.date >= start_date)
+    if end_date:
+        query = query.filter(Request.date <= end_date)
+    
+    # Apply pagination
+    total_records = query.count()
+    early_late_records = query.order_by(Request.created_at.desc()).offset(skip).limit(limit).all()
+    
+    # Convert to response format
+    early_late_data = []
+    for record in early_late_records:
+        # Extract details from description or use default
+        details = {}
+        if record.description:
+            try:
+                details = eval(record.description) if record.description.startswith('{') else {}
+            except:
+                details = {}
+        
+        duration = details.get('duration', 1.0) if isinstance(details, dict) else 1.0
+        
+        early_late_data.append({
+            "id": record.id,
+            "date": record.date,
+            "type": record.request_type,
+            "duration": duration,
+            "reason": record.description,
+            "created_at": record.created_at
+        })
+    
+    # Calculate summary statistics
+    total_requests = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type.in_(["early_going", "late_coming"])
+    ).count()
+    
+    early_going_requests = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "early_going"
+    ).count()
+    
+    late_coming_requests = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "late_coming"
+    ).count()
+    
+    summary = {
+        "total_requests": total_requests,
+        "early_going_requests": early_going_requests,
+        "late_coming_requests": late_coming_requests,
+        "most_common_type": "early_going" if early_going_requests > late_coming_requests else "late_coming"
+    }
+    
+    return EarlyLateHistoryResponse(
+        employee_id=employee_id,
+        employee_name=employee.user.full_name if employee.user else "Unknown",
+        total_requests=total_records,
+        early_late_data=early_late_data,
+        summary=summary
+    )
+
+
+@router.get("/employees/{employee_id}/help-tickets-history", response_model=HelpTicketsHistoryResponse)
+def get_employee_help_tickets_history(
+    employee_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get employee help tickets history (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+        skip: Number of records to skip
+        limit: Maximum number of records
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        HelpTicketsHistoryResponse: Employee help tickets history
+        
+    Raises:
+        HTTPException: 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    # Verify employee exists
+    employee = EmployeeService.get_employee_by_id(db, employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    # Build query for help ticket requests
+    query = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "help"
+    )
+    
+    # Apply date filters
+    if start_date:
+        query = query.filter(Request.date >= start_date)
+    if end_date:
+        query = query.filter(Request.date <= end_date)
+    
+    # Apply pagination
+    total_records = query.count()
+    help_records = query.order_by(Request.created_at.desc()).offset(skip).limit(limit).all()
+    
+    # Convert to response format
+    tickets_data = []
+    for record in help_records:
+        # Extract details from description
+        details = {}
+        if record.description:
+            try:
+                details = eval(record.description) if record.description.startswith('{') else {}
+            except:
+                details = {}
+        
+        category = details.get('category', 'Other') if isinstance(details, dict) else 'Other'
+        recipients = details.get('recipients', []) if isinstance(details, dict) else []
+        
+        # Get recipient names
+        recipient_names = []
+        if recipients:
+            recipient_employees = db.query(Employee).filter(Employee.id.in_(recipients)).all()
+            recipient_names = [emp.user.full_name for emp in recipient_employees if emp.user]
+        
+        tickets_data.append({
+            "id": record.id,
+            "subject": record.title or "Help Request",
+            "message_body": record.description or "",
+            "category": category,
+            "recipients": recipient_names,
+            "date": record.date,
+            "created_at": record.created_at
+        })
+    
+    # Calculate summary statistics
+    total_tickets = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "help"
+    ).count()
+    
+    # Count by category
+    all_help_requests = db.query(Request).filter(
+        Request.requester_id == employee_id,
+        Request.request_type == "help"
+    ).all()
+    
+    category_counts = {}
+    for request in all_help_requests:
+        details = {}
+        if request.description:
+            try:
+                details = eval(request.description) if request.description.startswith('{') else {}
+            except:
+                details = {}
+        
+        category = details.get('category', 'Other') if isinstance(details, dict) else 'Other'
+        category_counts[category] = category_counts.get(category, 0) + 1
+    
+    summary = {
+        "total_tickets": total_tickets,
+        "category_breakdown": category_counts,
+        "most_common_category": max(category_counts.items(), key=lambda x: x[1])[0] if category_counts else "None"
+    }
+    
+    return HelpTicketsHistoryResponse(
+        employee_id=employee_id,
+        employee_name=employee.user.full_name if employee.user else "Unknown",
+        total_tickets=total_records,
+        tickets_data=tickets_data,
+        summary=summary
+    )
+
+
+@router.get("/employees/{employee_id}/complete-log-history", response_model=CompleteLogHistoryResponse)
+def get_employee_complete_log_history(
+    employee_id: int,
+    filters: Optional[EmployeeLogFilters] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get complete employee log history (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        filters: Optional filters for log history
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        CompleteLogHistoryResponse: Complete employee log history
+        
+    Raises:
+        HTTPException: 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    # Verify employee exists
+    employee = EmployeeService.get_employee_by_id(db, employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    # Use provided filters or create default
+    if filters is None:
+        filters = EmployeeLogFilters()
+    
+    log_data = []
+    total_records = 0
+    
+    # Get attendance records
+    if filters.types is None or LogHistoryType.ATTENDANCE in filters.types:
+        attendance_query = db.query(Attendance).filter(Attendance.employee_id == employee_id)
+        
+        if filters.start_date:
+            attendance_query = attendance_query.filter(Attendance.date >= filters.start_date)
+        if filters.end_date:
+            attendance_query = attendance_query.filter(Attendance.date <= filters.end_date)
+        
+        attendance_records = attendance_query.order_by(Attendance.date.desc()).offset(filters.offset).limit(filters.limit // 4 if filters.types is None else filters.limit).all()
+        
+        for record in attendance_records:
+            log_data.append({
+                "id": record.id,
+                "type": "attendance",
+                "date": record.date,
+                "title": f"Attendance - {record.status.title()}",
+                "description": f"Clock in: {record.clock_in}, Clock out: {record.clock_out}, Hours: {record.total_hours}",
+                "status": record.status,
+                "metadata": {"clock_in": record.clock_in, "clock_out": record.clock_out, "total_hours": record.total_hours},
+                "created_at": record.created_at
+            })
+    
+    # Get leave records
+    if filters.types is None or LogHistoryType.LEAVE in filters.types:
+        leave_query = db.query(Leave).filter(Leave.employee_id == employee_id)
+        
+        if filters.start_date:
+            leave_query = leave_query.filter(Leave.start_date >= filters.start_date)
+        if filters.end_date:
+            leave_query = leave_query.filter(Leave.end_date <= filters.end_date)
+        
+        leave_records = leave_query.order_by(Leave.created_at.desc()).offset(filters.offset).limit(filters.limit // 4 if filters.types is None else filters.limit).all()
+        
+        for record in leave_records:
+            log_data.append({
+                "id": record.id,
+                "type": "leave",
+                "date": record.start_date,
+                "title": f"Leave - {record.leave_type.title()}",
+                "description": f"{record.days} days leave. Reason: {record.reason or 'No reason provided'}",
+                "status": record.leave_type,
+                "metadata": {"days": record.days, "end_date": record.end_date, "reason": record.reason},
+                "created_at": record.created_at
+            })
+    
+    # Get WFH records
+    if filters.types is None or LogHistoryType.WFH in filters.types:
+        wfh_query = db.query(Request).filter(
+            Request.requester_id == employee_id,
+            Request.request_type == "wfh"
+        )
+        
+        if filters.start_date:
+            wfh_query = wfh_query.filter(Request.date >= filters.start_date)
+        if filters.end_date:
+            wfh_query = wfh_query.filter(Request.date <= filters.end_date)
+        
+        wfh_records = wfh_query.order_by(Request.created_at.desc()).offset(filters.offset).limit(filters.limit // 4 if filters.types is None else filters.limit).all()
+        
+        for record in wfh_records:
+            days = 1
+            if record.date and record.end_date:
+                days = (record.end_date - record.date).days + 1
+            
+            log_data.append({
+                "id": record.id,
+                "type": "wfh",
+                "date": record.date,
+                "title": "Work From Home",
+                "description": f"{days} days WFH. Reason: {record.description or 'No reason provided'}",
+                "status": "approved",
+                "metadata": {"days": days, "end_date": record.end_date, "reason": record.description},
+                "created_at": record.created_at
+            })
+    
+    # Get early/late records
+    if filters.types is None or LogHistoryType.EARLY_LATE in filters.types:
+        early_late_query = db.query(Request).filter(
+            Request.requester_id == employee_id,
+            Request.request_type.in_(["early_going", "late_coming"])
+        )
+        
+        if filters.start_date:
+            early_late_query = early_late_query.filter(Request.date >= filters.start_date)
+        if filters.end_date:
+            early_late_query = early_late_query.filter(Request.date <= filters.end_date)
+        
+        early_late_records = early_late_query.order_by(Request.created_at.desc()).offset(filters.offset).limit(filters.limit // 4 if filters.types is None else filters.limit).all()
+        
+        for record in early_late_records:
+            details = {}
+            if record.description:
+                try:
+                    details = eval(record.description) if record.description.startswith('{') else {}
+                except:
+                    details = {}
+            
+            duration = details.get('duration', 1.0) if isinstance(details, dict) else 1.0
+            
+            log_data.append({
+                "id": record.id,
+                "type": "early_late",
+                "date": record.date,
+                "title": record.request_type.replace("_", " ").title(),
+                "description": f"Duration: {duration} hours. Reason: {record.description or 'No reason provided'}",
+                "status": "approved",
+                "metadata": {"duration": duration, "type": record.request_type},
+                "created_at": record.created_at
+            })
+    
+    # Get help ticket records
+    if filters.types is None or LogHistoryType.HELP_TICKET in filters.types:
+        help_query = db.query(Request).filter(
+            Request.requester_id == employee_id,
+            Request.request_type == "help"
+        )
+        
+        if filters.start_date:
+            help_query = help_query.filter(Request.date >= filters.start_date)
+        if filters.end_date:
+            help_query = help_query.filter(Request.date <= filters.end_date)
+        
+        help_records = help_query.order_by(Request.created_at.desc()).offset(filters.offset).limit(filters.limit // 4 if filters.types is None else filters.limit).all()
+        
+        for record in help_records:
+            details = {}
+            if record.description:
+                try:
+                    details = eval(record.description) if record.description.startswith('{') else {}
+                except:
+                    details = {}
+            
+            category = details.get('category', 'Other') if isinstance(details, dict) else 'Other'
+            
+            log_data.append({
+                "id": record.id,
+                "type": "help_ticket",
+                "date": record.date,
+                "title": f"Help Ticket - {category}",
+                "description": f"Subject: {record.title or 'No subject'}. {record.description or 'No description'}",
+                "status": "open",
+                "metadata": {"category": category, "subject": record.title},
+                "created_at": record.created_at
+            })
+    
+    # Sort all log data by date (most recent first)
+    log_data.sort(key=lambda x: x["date"], reverse=True)
+    
+    # Apply final pagination
+    total_records = len(log_data)
+    log_data = log_data[filters.offset:filters.offset + filters.limit]
+    
+    # Calculate comprehensive summary
+    summary = {
+        "attendance_records": db.query(Attendance).filter(Attendance.employee_id == employee_id).count(),
+        "leave_records": db.query(Leave).filter(Leave.employee_id == employee_id).count(),
+        "wfh_requests": db.query(Request).filter(Request.requester_id == employee_id, Request.request_type == "wfh").count(),
+        "early_late_requests": db.query(Request).filter(Request.requester_id == employee_id, Request.request_type.in_(["early_going", "late_coming"])).count(),
+        "help_tickets": db.query(Request).filter(Request.requester_id == employee_id, Request.request_type == "help").count(),
+        "date_range": {
+            "start": filters.start_date.isoformat() if filters.start_date else "All time",
+            "end": filters.end_date.isoformat() if filters.end_date else "All time"
+        }
+    }
+    
+    pagination = {
+        "total_records": total_records,
+        "offset": filters.offset,
+        "limit": filters.limit,
+        "has_more": filters.offset + filters.limit < total_records
+    }
+    
+    return CompleteLogHistoryResponse(
+        employee_id=employee_id,
+        employee_name=employee.user.full_name if employee.user else "Unknown",
+        total_records=len(log_data),
+        log_data=log_data,
+        summary=summary,
+        pagination=pagination
+    )
