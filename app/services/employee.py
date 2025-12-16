@@ -173,6 +173,7 @@ class EmployeeService:
         
         return query.offset(skip).limit(limit).all()
     
+
     @staticmethod
     def update_employee_profile(
         db: Session,
@@ -192,6 +193,22 @@ class EmployeeService:
         """
         for key, value in kwargs.items():
             if hasattr(employee, key) and value is not None:
+                # Special handling for manager_id to prevent invalid values
+                if key == "manager_id":
+                    # Convert 0 to None to prevent foreign key constraint violations
+                    if value == 0:
+                        value = None
+                    elif value == employee.id:
+                        raise ValueError("Employee cannot be their own manager")
+                    elif value is not None and value > 0:
+                        # Validate that the manager exists and is active
+                        manager = db.query(Employee).filter(
+                            Employee.id == value,
+                            Employee.status == "active"
+                        ).first()
+                        if not manager:
+                            raise ValueError("Manager not found or not active")
+                
                 setattr(employee, key, value)
         
         db.commit()
@@ -214,6 +231,7 @@ class EmployeeService:
             Employee.manager_id == manager_id
         ).all()
     
+
     @staticmethod
     def delete_employee(db: Session, employee: Employee) -> bool:
         """
@@ -231,4 +249,64 @@ class EmployeeService:
         if user:
             db.delete(user)
         db.commit()
+        return True
+    
+    @staticmethod
+    def get_available_managers(db: Session, exclude_employee_id: int = None) -> List[Employee]:
+        """
+        Get employees who can be assigned as managers.
+        
+        Args:
+            db: Database session
+            exclude_employee_id: Optional employee ID to exclude (e.g., when updating that employee)
+            
+        Returns:
+            List[Employee]: List of potential managers
+        """
+        query = db.query(Employee).filter(
+            Employee.status == "active"
+        )
+        
+        if exclude_employee_id:
+            query = query.filter(Employee.id != exclude_employee_id)
+        
+        return query.all()
+    
+    @staticmethod
+    def validate_manager_assignment(db: Session, employee_id: int, manager_id: int) -> bool:
+        """
+        Validate if an employee can be assigned to a manager.
+        
+        Args:
+            db: Database session
+            employee_id: Employee to be assigned
+            manager_id: Proposed manager ID
+            
+        Returns:
+            bool: True if assignment is valid
+            
+        Raises:
+            ValueError: If assignment is invalid
+        """
+        # Check if employee and manager exist
+        employee = EmployeeService.get_employee_by_id(db, employee_id)
+        manager = EmployeeService.get_employee_by_id(db, manager_id)
+        
+        if not employee:
+            raise ValueError("Employee not found")
+        if not manager:
+            raise ValueError("Manager not found")
+        
+        # Check if manager is active
+        if manager.status != "active":
+            raise ValueError("Manager must be an active employee")
+        
+        # Check if employee is trying to be their own manager
+        if employee_id == manager_id:
+            raise ValueError("Employee cannot be their own manager")
+        
+        # Check for circular reference (employee cannot be a manager of their own manager)
+        if manager.manager_id == employee_id:
+            raise ValueError("This assignment would create a circular reference")
+        
         return True
