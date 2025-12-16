@@ -13,12 +13,14 @@ from datetime import date
 from ..database import get_db
 from ..models.user import User
 from ..models.employee import Employee
+
 from ..schemas.employee import (
     EmployeeCreate, 
     EmployeeUpdate, 
     EmployeeListItem, 
     EmployeeProfile,
-    EmployeeStatusUpdate
+    EmployeeStatusUpdate,
+    ManagerInfo
 )
 from ..services.employee import EmployeeService
 from ..utils.deps import get_current_user
@@ -61,14 +63,22 @@ def get_all_employees_admin(
     
     employees = EmployeeService.get_all_employees(db, search, skip, limit)
     
+
     result = []
     for emp in employees:
-        # Get manager name
-        manager_name = None
+        # Get manager object
+        manager_info = None
         if emp.manager_id:
             manager = db.query(Employee).filter(Employee.id == emp.manager_id).first()
             if manager and manager.user:
-                manager_name = manager.user.full_name
+                manager_info = ManagerInfo(
+                    id=manager.id,
+                    employeeId=manager.employee_id,
+                    name=manager.user.full_name,
+                    email=manager.user.email,
+                    designation=manager.designation,
+                    department=manager.department
+                )
         
         # Get salary for monthly pay
         salary = emp.salary.net_pay if emp.salary else None
@@ -84,7 +94,7 @@ def get_all_employees_admin(
             avatar=emp.avatar_url,
             joinDate=emp.join_date,
             location=emp.location,
-            manager=manager_name
+            manager=manager_info.name if manager_info else None
         ))
     
     return result
@@ -113,14 +123,22 @@ def get_available_managers(
     # Get active employees who could be managers
     available_employees = EmployeeService.get_available_managers(db, exclude_employee_id)
     
+
     result = []
     for emp in available_employees:
-        # Get manager name for this potential manager
-        manager_name = None
+        # Get manager object for this potential manager
+        manager_info = None
         if emp.manager_id:
             manager = db.query(Employee).filter(Employee.id == emp.manager_id).first()
             if manager and manager.user:
-                manager_name = manager.user.full_name
+                manager_info = ManagerInfo(
+                    id=manager.id,
+                    employeeId=manager.employee_id,
+                    name=manager.user.full_name,
+                    email=manager.user.email,
+                    designation=manager.designation,
+                    department=manager.department
+                )
         
         result.append(EmployeeListItem(
             id=emp.id,
@@ -133,7 +151,7 @@ def get_available_managers(
             avatar=emp.avatar_url,
             joinDate=emp.join_date,
             location=emp.location,
-            manager=manager_name
+            manager=manager_info.name if manager_info else None
         ))
     
     return result
@@ -161,6 +179,7 @@ def get_employee_admin(
     """
     check_admin_access(current_user)
     
+
     employee = EmployeeService.get_employee_by_id(db, employee_id)
     if not employee:
         raise HTTPException(
@@ -168,12 +187,19 @@ def get_employee_admin(
             detail="Employee not found"
         )
     
-    # Get manager name
-    manager_name = None
+    # Get manager object
+    manager_info = None
     if employee.manager_id:
         manager = db.query(Employee).filter(Employee.id == employee.manager_id).first()
         if manager and manager.user:
-            manager_name = manager.user.full_name
+            manager_info = ManagerInfo(
+                id=manager.id,
+                employeeId=manager.employee_id,
+                name=manager.user.full_name,
+                email=manager.user.email,
+                designation=manager.designation,
+                department=manager.department
+            )
     
     return EmployeeProfile(
         id=employee.id,
@@ -184,7 +210,7 @@ def get_employee_admin(
         designation=employee.designation,
         joinDate=employee.join_date,
         location=employee.location,
-        manager=manager_name,
+        manager=manager_info,
         dob=employee.dob,
         gender=employee.gender,
         marital_status=employee.marital_status,
@@ -217,14 +243,19 @@ def create_employee_admin(
     Raises:
         HTTPException: 400 if validation fails
     """
+
     check_admin_access(current_user)
     
+    # Handle manager_id conversion (convert 0 to None for default null behavior)
+    manager_id = employee_data.manager_id
+    if manager_id == 0:
+        manager_id = None
 
-    # Validate manager_id if provided
-    if employee_data.manager_id:
+    # Validate manager_id if provided (and not None)
+    if manager_id:
         try:
             EmployeeService.validate_manager_assignment(
-                db, None, employee_data.manager_id  # employee_id is None for new employee
+                db, None, manager_id  # employee_id is None for new employee
             )
         except ValueError as e:
             raise HTTPException(
@@ -232,37 +263,47 @@ def create_employee_admin(
                 detail=str(e)
             )
     
-    # Check for duplicate employee ID
-    existing_employee = db.query(Employee).filter(
-        Employee.employee_id == employee_data.employee_id
-    ).first()
-    if existing_employee:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Employee ID already exists"
-        )
-    
-    # Create employee
+
+    # Check for duplicate employee ID only if one is provided
+    if employee_data.employee_id:
+        existing_employee = db.query(Employee).filter(
+            Employee.employee_id == employee_data.employee_id
+        ).first()
+        if existing_employee:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Employee ID already exists"
+            )
+
+    # Create employee (auto-generate employee_id if not provided)
     employee = EmployeeService.create_employee(
         db=db,
         email=employee_data.email,
         password=employee_data.password,
         full_name=employee_data.full_name,
-        employee_id=employee_data.employee_id,
+        employee_id=employee_data.employee_id,  # None means auto-generate
         role=employee_data.role,
         department=employee_data.department,
         designation=employee_data.designation,
         join_date=employee_data.join_date,
         location=employee_data.location,
-        manager_id=employee_data.manager_id
+        manager_id=manager_id
     )
     
+
     # Return created employee details
-    manager_name = None
+    manager_info = None
     if employee.manager_id:
         manager = db.query(Employee).filter(Employee.id == employee.manager_id).first()
         if manager and manager.user:
-            manager_name = manager.user.full_name
+            manager_info = ManagerInfo(
+                id=manager.id,
+                employeeId=manager.employee_id,
+                name=manager.user.full_name,
+                email=manager.user.email,
+                designation=manager.designation,
+                department=manager.department
+            )
     
     return EmployeeProfile(
         id=employee.id,
@@ -273,7 +314,7 @@ def create_employee_admin(
         designation=employee.designation,
         joinDate=employee.join_date,
         location=employee.location,
-        manager=manager_name,
+        manager=manager_info,
         dob=employee.dob,
         gender=employee.gender,
         marital_status=employee.marital_status,
@@ -354,18 +395,26 @@ def update_employee_admin(
     if update_data:
         EmployeeService.update_employee_profile(db, employee, **update_data)
     
+
     # Update user name if needed
     if employee_data.full_name and employee.user:
         employee.user.full_name = employee_data.full_name
         db.commit()
         db.refresh(employee)
     
-    # Get updated manager name
-    manager_name = None
+    # Get updated manager object
+    manager_info = None
     if employee.manager_id:
         manager = db.query(Employee).filter(Employee.id == employee.manager_id).first()
         if manager and manager.user:
-            manager_name = manager.user.full_name
+            manager_info = ManagerInfo(
+                id=manager.id,
+                employeeId=manager.employee_id,
+                name=manager.user.full_name,
+                email=manager.user.email,
+                designation=manager.designation,
+                department=manager.department
+            )
     
     return EmployeeProfile(
         id=employee.id,
@@ -376,7 +425,7 @@ def update_employee_admin(
         designation=employee.designation,
         joinDate=employee.join_date,
         location=employee.location,
-        manager=manager_name,
+        manager=manager_info,
         dob=employee.dob,
         gender=employee.gender,
         marital_status=employee.marital_status,
@@ -428,17 +477,25 @@ def update_employee_status(
             detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
         )
     
+
     # Update status
     employee.status = status_data.status
     db.commit()
     db.refresh(employee)
     
-    # Get manager name
-    manager_name = None
+    # Get manager object
+    manager_info = None
     if employee.manager_id:
         manager = db.query(Employee).filter(Employee.id == employee.manager_id).first()
         if manager and manager.user:
-            manager_name = manager.user.full_name
+            manager_info = ManagerInfo(
+                id=manager.id,
+                employeeId=manager.employee_id,
+                name=manager.user.full_name,
+                email=manager.user.email,
+                designation=manager.designation,
+                department=manager.department
+            )
     
     return EmployeeProfile(
         id=employee.id,
@@ -449,7 +506,7 @@ def update_employee_status(
         designation=employee.designation,
         joinDate=employee.join_date,
         location=employee.location,
-        manager=manager_name,
+        manager=manager_info,
         dob=employee.dob,
         gender=employee.gender,
         marital_status=employee.marital_status,

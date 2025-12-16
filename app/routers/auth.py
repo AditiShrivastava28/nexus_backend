@@ -80,17 +80,14 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
             detail="Email already registered"
         )
     
-    # Create user and employee profile
-    # Generate a unique employee ID
-    import random
-    employee_id = f"EMP{random.randint(10000, 99999)}"
-    
+
+    # Create user and employee profile (auto-generate employee_id)
     EmployeeService.create_employee(
         db=db,
         email=user_data.email,
         password=user_data.password,
-        full_name=user_data.full_name,
-        employee_id=employee_id
+        full_name=user_data.full_name
+        # employee_id is None by default, so it will be auto-generated
     )
     
     return {"message": "User registered successfully"}

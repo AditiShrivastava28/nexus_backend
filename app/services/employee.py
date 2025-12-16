@@ -4,14 +4,18 @@ Employee service.
 This module provides employee-related business logic.
 """
 
+
+
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import date
+import re
 
 from ..models.user import User
 from ..models.employee import Employee, EmployeeJob
 from ..models.salary import Salary
 from ..models.leave import LeaveBalance
+from ..models.document import Document
 from .auth import AuthService
 
 
@@ -23,12 +27,51 @@ class EmployeeService:
     """
     
     @staticmethod
+    def generate_unique_employee_id(db: Session) -> str:
+        """
+        Generate a unique employee ID starting with 'emp-' followed by sequential number.
+        
+        Args:
+            db: Database session
+            
+        Returns:
+            str: Unique employee ID in format 'emp-001', 'emp-002', etc.
+        """
+        # Get all existing employee IDs that match the 'emp-' pattern
+        existing_ids = db.query(Employee.employee_id).filter(
+            Employee.employee_id.like('emp-%')
+        ).all()
+        
+        # Extract numbers from existing IDs
+        existing_numbers = []
+        for emp_id in existing_ids:
+            match = re.search(r'emp-(\d+)', emp_id[0])
+            if match:
+                existing_numbers.append(int(match.group(1)))
+        
+        # Find the next sequential number
+        next_number = 1
+        if existing_numbers:
+            next_number = max(existing_numbers) + 1
+        
+        # Generate the new employee ID
+        new_employee_id = f"emp-{next_number:03d}"  # Zero-padded to 3 digits
+        
+        # Ensure uniqueness by checking if it already exists
+        while db.query(Employee).filter(Employee.employee_id == new_employee_id).first():
+            next_number += 1
+            new_employee_id = f"emp-{next_number:03d}"
+        
+        return new_employee_id
+    
+
+    @staticmethod
     def create_employee(
         db: Session,
         email: str,
         password: str,
         full_name: str,
-        employee_id: str,
+        employee_id: str = None,
         role: str = "employee",
         department: str = None,
         designation: str = None,
@@ -36,6 +79,7 @@ class EmployeeService:
         location: str = None,
         manager_id: int = None
     ) -> Employee:
+
         """
         Create a new employee with user account.
         
@@ -44,7 +88,7 @@ class EmployeeService:
             email: Work email
             password: Initial password
             full_name: Full name
-            employee_id: Company employee ID
+            employee_id: Company employee ID (optional, auto-generated if not provided)
             role: User role
             department: Department
             designation: Job title
@@ -55,6 +99,10 @@ class EmployeeService:
         Returns:
             Employee: Created employee object
         """
+        # Generate employee_id if not provided
+        if employee_id is None:
+            employee_id = EmployeeService.generate_unique_employee_id(db)
+        
         # Create user account first
         user = AuthService.create_user(db, email, password, full_name, role)
         
@@ -171,8 +219,9 @@ class EmployeeService:
                 (Employee.employee_id.ilike(search_term))
             )
         
+
+
         return query.offset(skip).limit(limit).all()
-    
 
     @staticmethod
     def update_employee_profile(
@@ -232,6 +281,7 @@ class EmployeeService:
         ).all()
     
 
+
     @staticmethod
     def delete_employee(db: Session, employee: Employee) -> bool:
         """
@@ -244,10 +294,50 @@ class EmployeeService:
         Returns:
             bool: True if successful
         """
+
+        # Delete related records first to avoid constraint violations
+        # 1. Delete salary record (one-to-one relationship)
+        if employee.salary:
+            db.delete(employee.salary)
+        
+        # 2. Delete payslip records (one-to-many relationship)
+        for payslip in employee.payslips:
+            db.delete(payslip)
+        
+        # 3. Delete leave balances
+        for leave_balance in employee.leave_balances:
+            db.delete(leave_balance)
+        
+        # 4. Delete messages where employee is sender
+        for message in employee.sent_messages:
+            db.delete(message)
+        
+        # 5. Delete messages where employee is receiver
+        for message in employee.received_messages:
+            db.delete(message)
+        
+
+        # 6. Delete requests made by this employee
+        for request in employee.requests:
+            db.delete(request)
+        
+        # 7. Handle documents where employee was the verifier
+        # Note: documents where employee_id is this employee will be cascade deleted
+        # but documents where verified_by is this employee need special handling
+        for document in db.query(Document).filter(Document.verified_by == employee.id).all():
+            document.verified_by = None  # Set verifier to NULL since it's nullable
+            db.commit()
+        
+        # 8. Delete other related records that might have constraints
+        # Note: Some relationships like leaves, attendances, assets, etc. have cascade="all, delete-orphan"
+        # so they should be deleted automatically when employee is deleted
+        
+        # Finally, delete the employee and user
         user = employee.user
         db.delete(employee)
         if user:
             db.delete(user)
+        
         db.commit()
         return True
     
@@ -272,6 +362,7 @@ class EmployeeService:
         
         return query.all()
     
+
     @staticmethod
     def validate_manager_assignment(db: Session, employee_id: int, manager_id: int) -> bool:
         """
@@ -279,7 +370,7 @@ class EmployeeService:
         
         Args:
             db: Database session
-            employee_id: Employee to be assigned
+            employee_id: Employee to be assigned (None for new employees)
             manager_id: Proposed manager ID
             
         Returns:
@@ -288,12 +379,8 @@ class EmployeeService:
         Raises:
             ValueError: If assignment is invalid
         """
-        # Check if employee and manager exist
-        employee = EmployeeService.get_employee_by_id(db, employee_id)
+        # Check if manager exists
         manager = EmployeeService.get_employee_by_id(db, manager_id)
-        
-        if not employee:
-            raise ValueError("Employee not found")
         if not manager:
             raise ValueError("Manager not found")
         
@@ -301,12 +388,19 @@ class EmployeeService:
         if manager.status != "active":
             raise ValueError("Manager must be an active employee")
         
-        # Check if employee is trying to be their own manager
-        if employee_id == manager_id:
-            raise ValueError("Employee cannot be their own manager")
-        
-        # Check for circular reference (employee cannot be a manager of their own manager)
-        if manager.manager_id == employee_id:
-            raise ValueError("This assignment would create a circular reference")
+        # Only check employee-related validations if employee_id is provided (existing employee)
+        if employee_id is not None:
+            # Check if employee exists
+            employee = EmployeeService.get_employee_by_id(db, employee_id)
+            if not employee:
+                raise ValueError("Employee not found")
+            
+            # Check if employee is trying to be their own manager
+            if employee_id == manager_id:
+                raise ValueError("Employee cannot be their own manager")
+            
+            # Check for circular reference (employee cannot be a manager of their own manager)
+            if manager.manager_id == employee_id:
+                raise ValueError("This assignment would create a circular reference")
         
         return True

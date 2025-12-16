@@ -1,3 +1,4 @@
+
 """
 Employee-related Pydantic schemas.
 
@@ -67,6 +68,30 @@ class EmployeeProfileUpdate(BaseModel):
     mobile: Optional[str] = None
 
 
+
+class ManagerInfo(BaseModel):
+    """
+    Manager information for employee responses.
+    
+    Attributes:
+        id: Manager's employee ID
+        employeeId: Manager's company employee ID
+
+        email: Manager's work email
+        designation: Manager's job title
+        department: Manager's department
+    """
+    id: int
+    employeeId: str
+    name: str
+    email: str
+    designation: Optional[str] = None
+    department: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class EmployeeProfile(BaseModel):
     """
     Full employee profile response.
@@ -80,7 +105,7 @@ class EmployeeProfile(BaseModel):
         designation: Job title
         joinDate: Date of joining
         location: Work location
-        manager: Manager name
+        manager: Manager employee object (null if no manager assigned)
         dob: Date of birth
         gender: Gender
         marital_status: Marital status
@@ -99,7 +124,7 @@ class EmployeeProfile(BaseModel):
     designation: Optional[str] = None
     joinDate: Optional[date] = None
     location: Optional[str] = None
-    manager: Optional[str] = None
+    manager: Optional[ManagerInfo] = None
     dob: Optional[date] = None
     gender: Optional[str] = None
     marital_status: Optional[str] = None
@@ -112,7 +137,6 @@ class EmployeeProfile(BaseModel):
 
     class Config:
         from_attributes = True
-
 
 class EmployeeListItem(BaseModel):
     """
@@ -147,6 +171,7 @@ class EmployeeListItem(BaseModel):
         from_attributes = True
 
 
+
 class EmployeeCreate(BaseModel):
     """
     Schema for creating a new employee.
@@ -155,7 +180,7 @@ class EmployeeCreate(BaseModel):
         email: Work email
         password: Initial password
         full_name: Full name
-        employee_id: Company employee ID
+        employee_id: Company employee ID (optional, auto-generated if not provided)
         department: Department
         designation: Job title
         join_date: Date of joining
@@ -166,7 +191,7 @@ class EmployeeCreate(BaseModel):
     email: str
     password: str
     full_name: str
-    employee_id: str
+    employee_id: Optional[str] = None
     department: Optional[str] = None
     designation: Optional[str] = None
     join_date: Optional[date] = None
