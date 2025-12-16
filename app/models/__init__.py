@@ -4,10 +4,11 @@ SQLAlchemy database models package.
 This package contains all the ORM models for the NexusHR database.
 """
 
+
 from .user import User
 from .employee import Employee, EmployeeJob
 from .attendance import Attendance, Break
-from .leave import Leave, LeaveBalance
+from .leave import Leave, LeaveBalance, CorporateLeave
 from .asset import Asset
 from .document import Document
 from .message import Message
@@ -22,6 +23,7 @@ __all__ = [
     "Break",
     "Leave",
     "LeaveBalance",
+    "CorporateLeave",
     "Asset",
     "Document",
     "Message",

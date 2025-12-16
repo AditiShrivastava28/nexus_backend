@@ -4,10 +4,11 @@ Admin API routes.
 This module provides endpoints for employee management by admins.
 """
 
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime
 
 from ..database import get_db
 from ..models.user import User
@@ -26,8 +27,13 @@ from ..schemas.document import DocumentResponse
 from ..services.employee import EmployeeService
 from ..services.auth import AuthService
 from ..utils.deps import require_admin, get_db
-from ..models.leave import LeaveBalance
-from ..schemas.leave import LeaveBalanceUpdate
+
+
+
+from ..models.leave import LeaveBalance, CorporateLeave
+from ..schemas.leave import LeaveBalanceUpdate, CorporateLeaveCreate, CorporateLeaveResponse, CorporateLeaveUpdate
+from ..services.corporate_leave import CorporateLeaveAIService
+from ..services.holiday_scanner import HolidayScannerService
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -598,4 +604,441 @@ def verify_document(
     
     db.commit()
     
+
     return {"message": "Document verified successfully"}
+
+
+# Corporate Leave Management Endpoints
+
+@router.post("/corporate-leaves/generate")
+def generate_corporate_leaves(
+    year: int,
+    region: str = "general",
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate AI-based corporate leaves for a given year.
+    
+    Args:
+        year: Year for which to generate corporate leaves
+        region: Region for specific holidays (general, india, uk)
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        dict: Generated leaves count and message
+    """
+    # Generate corporate leaves using AI service
+    generated_leaves = CorporateLeaveAIService.generate_corporate_leaves(year, region)
+    
+    created_count = 0
+    skipped_count = 0
+    
+    for leave_data in generated_leaves:
+        # Check if a corporate leave with same date already exists
+        existing_leave = db.query(CorporateLeave).filter(
+            CorporateLeave.date == leave_data["date"]
+        ).first()
+        
+        if not existing_leave:
+            # Create new corporate leave
+            corporate_leave = CorporateLeave(
+                name=leave_data["name"],
+                date=leave_data["date"],
+                leave_type=leave_data["type"],
+                is_recurring=str(leave_data["is_recurring"]).lower(),
+                created_by=admin.id
+            )
+            db.add(corporate_leave)
+            created_count += 1
+        else:
+            skipped_count += 1
+    
+    db.commit()
+    
+    return {
+        "message": f"Corporate leaves generated successfully",
+        "year": year,
+        "region": region,
+        "created": created_count,
+        "skipped": skipped_count,
+        "total_generated": len(generated_leaves)
+    }
+
+
+@router.get("/corporate-leaves", response_model=List[CorporateLeaveResponse])
+def get_corporate_leaves(
+    year: Optional[int] = Query(None, description="Filter by year"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all corporate leaves, optionally filtered by year.
+    
+    Args:
+        year: Optional year filter
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        List[CorporateLeaveResponse]: List of corporate leaves
+    """
+    query = db.query(CorporateLeave)
+    
+    if year:
+        query = query.filter(CorporateLeave.date >= date(year, 1, 1))
+        query = query.filter(CorporateLeave.date <= date(year, 12, 31))
+    
+    corporate_leaves = query.order_by(CorporateLeave.date).all()
+    
+    result = []
+    for leave in corporate_leaves:
+        result.append(CorporateLeaveResponse(
+            id=leave.id,
+            name=leave.name,
+            date=leave.date,
+            leave_type=leave.leave_type,
+            is_recurring=leave.is_recurring == "true",
+            created_at=leave.created_at.date() if leave.created_at else None
+        ))
+    
+    return result
+
+
+@router.post("/corporate-leaves", response_model=CorporateLeaveResponse, status_code=status.HTTP_201_CREATED)
+def create_corporate_leave(
+    leave_data: CorporateLeaveCreate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new corporate leave.
+    
+    Args:
+        leave_data: Corporate leave data
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        CorporateLeaveResponse: Created corporate leave
+        
+    Raises:
+        HTTPException: 400 if leave already exists on the same date
+    """
+    # Check if a corporate leave with same date already exists
+    existing_leave = db.query(CorporateLeave).filter(
+        CorporateLeave.date == leave_data.date
+    ).first()
+    
+    if existing_leave:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Corporate leave already exists on {leave_data.date}"
+        )
+    
+    corporate_leave = CorporateLeave(
+        name=leave_data.name,
+        date=leave_data.date,
+        leave_type=leave_data.leave_type,
+        is_recurring=str(leave_data.is_recurring).lower(),
+        created_by=admin.id
+    )
+    
+    db.add(corporate_leave)
+    db.commit()
+    db.refresh(corporate_leave)
+    
+    return CorporateLeaveResponse(
+        id=corporate_leave.id,
+        name=corporate_leave.name,
+        date=corporate_leave.date,
+        leave_type=corporate_leave.leave_type,
+        is_recurring=corporate_leave.is_recurring == "true",
+        created_at=corporate_leave.created_at.date() if corporate_leave.created_at else None
+    )
+
+
+@router.put("/corporate-leaves/{leave_id}", response_model=CorporateLeaveResponse)
+def update_corporate_leave(
+    leave_id: int,
+    update_data: CorporateLeaveUpdate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a corporate leave.
+    
+    Args:
+        leave_id: Corporate leave ID
+        update_data: Fields to update
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        CorporateLeaveResponse: Updated corporate leave
+        
+    Raises:
+        HTTPException: 404 if corporate leave not found
+    """
+    corporate_leave = db.query(CorporateLeave).filter(CorporateLeave.id == leave_id).first()
+    
+    if not corporate_leave:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Corporate leave not found"
+        )
+    
+    # Update fields
+    update_dict = update_data.model_dump(exclude_unset=True)
+    
+    for key, value in update_dict.items():
+        if key == "is_recurring" and value is not None:
+            value = str(value).lower()
+        if hasattr(corporate_leave, key):
+            setattr(corporate_leave, key, value)
+    
+    db.commit()
+    db.refresh(corporate_leave)
+    
+    return CorporateLeaveResponse(
+        id=corporate_leave.id,
+        name=corporate_leave.name,
+        date=corporate_leave.date,
+        leave_type=corporate_leave.leave_type,
+        is_recurring=corporate_leave.is_recurring == "true",
+        created_at=corporate_leave.created_at.date() if corporate_leave.created_at else None
+    )
+
+
+@router.delete("/corporate-leaves/{leave_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_corporate_leave(
+    leave_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a corporate leave.
+    
+    Args:
+        leave_id: Corporate leave ID to delete
+        admin: Admin user
+        db: Database session
+        
+    Raises:
+        HTTPException: 404 if corporate leave not found
+    """
+    corporate_leave = db.query(CorporateLeave).filter(CorporateLeave.id == leave_id).first()
+    
+    if not corporate_leave:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Corporate leave not found"
+        )
+    
+
+    db.delete(corporate_leave)
+    db.commit()
+
+
+# Dynamic Holiday Scanner Endpoints
+
+@router.post("/holidays/scan-current")
+def scan_current_year_holidays(
+    regions: List[str] = Query(["general", "india", "uk"], description="Regions to include"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Scan and update holidays for current year only.
+    
+    Args:
+        regions: List of regions to include in scanning
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        Dictionary with scan results
+    """
+    result = HolidayScannerService.scan_current_year_holidays(db, admin, regions)
+    return result
+
+
+@router.post("/holidays/scan-range")
+def scan_holidays_in_range(
+    start_year: int = Query(..., description="Start year for scanning"),
+    end_year: int = Query(..., description="End year for scanning"),
+    regions: List[str] = Query(["general", "india", "uk"], description="Regions to include"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Scan and update holidays for specified year range.
+    
+    Args:
+        start_year: Starting year for scanning
+        end_year: Ending year for scanning
+        regions: List of regions to include in scanning
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        Dictionary with scan results
+    """
+    if start_year > end_year:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Start year must be less than or equal to end year"
+        )
+    
+    result = HolidayScannerService.scan_and_update_holidays(
+        db, admin, regions, (start_year, end_year)
+    )
+    return result
+
+
+@router.post("/holidays/scan-future")
+def scan_future_years_holidays(
+    years_ahead: int = Query(2, description="Number of years ahead to scan"),
+    regions: List[str] = Query(["general", "india", "uk"], description="Regions to include"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Scan and update holidays for current + future years.
+    
+    Args:
+        years_ahead: Number of years ahead to scan
+        regions: List of regions to include in scanning
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        Dictionary with scan results
+    """
+    if years_ahead < 1 or years_ahead > 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Years ahead must be between 1 and 10"
+        )
+    
+    result = HolidayScannerService.scan_future_years_holidays(db, admin, regions, years_ahead)
+    return result
+
+
+@router.post("/holidays/cleanup")
+def cleanup_old_holidays(
+    keep_years_back: int = Query(1, description="Number of years back to keep"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Clean up holidays from years before the specified threshold.
+    
+    Args:
+        keep_years_back: Number of years back to keep
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        Dictionary with cleanup results
+    """
+    if keep_years_back < 0 or keep_years_back > 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Keep years back must be between 0 and 10"
+        )
+    
+    result = HolidayScannerService.cleanup_old_holidays(db, keep_years_back)
+    return result
+
+
+@router.get("/holidays/statistics")
+def get_holiday_statistics(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Get statistics about current holidays in the database.
+    
+    Args:
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        Dictionary with holiday statistics
+    """
+    result = HolidayScannerService.get_holiday_statistics(db)
+    return result
+
+
+@router.get("/holidays/conflicts")
+def detect_holiday_conflicts(
+    year: Optional[int] = Query(None, description="Year to filter conflicts (optional)"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Detect potential holiday conflicts in the database.
+    
+    Args:
+        year: Optional year to filter conflicts
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        List of potential conflicts
+    """
+    result = HolidayScannerService.detect_holiday_conflicts(db, year)
+    return {
+        "conflicts_found": len(result),
+        "conflicts": result
+    }
+
+
+@router.post("/holidays/auto-update")
+def auto_update_holidays(
+    regions: List[str] = Query(["general", "india", "uk"], description="Regions to include"),
+    years_ahead: int = Query(2, description="Number of years ahead to maintain"),
+    keep_years_back: int = Query(1, description="Number of years back to keep"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Automatically update holidays: clean old ones and scan current + future years.
+    
+    Args:
+        regions: List of regions to include
+        years_ahead: Number of years ahead to maintain
+        keep_years_back: Number of years back to keep
+        admin: Admin user
+        db: Database session
+        
+    Returns:
+        Dictionary with complete update results
+    """
+    current_year = datetime.now().year
+    
+    # Clean up old holidays first
+    cleanup_result = HolidayScannerService.cleanup_old_holidays(db, keep_years_back)
+    
+    # Scan and update current + future years
+    scan_result = HolidayScannerService.scan_future_years_holidays(
+        db, admin, regions, years_ahead
+    )
+    
+    return {
+        "message": "Auto-update completed successfully",
+        "current_year": current_year,
+        "regions": regions,
+        "years_ahead": years_ahead,
+        "keep_years_back": keep_years_back,
+        "cleanup": cleanup_result,
+        "scan": scan_result,
+        "summary": {
+            "total_deleted": cleanup_result["deleted_count"],
+            "total_created": scan_result["created"],
+            "total_skipped": scan_result["skipped"],
+            "years_processed": scan_result["years_processed"]
+        }
+    }

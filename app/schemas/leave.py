@@ -121,11 +121,93 @@ class LeaveApplyResponse(BaseModel):
         from_attributes = True
 
 
+
 class LeaveBalanceUpdate(BaseModel):
     """
     Schema for admin updating leave allocation (total days) for an employee/year.
     """
     total_days: int
+
+    class Config:
+        from_attributes = True
+
+
+# Corporate Leave Schemas
+class CorporateLeaveCreate(BaseModel):
+    """
+    Schema for creating a new corporate leave.
+    
+    Attributes:
+        name: Name/occasion of the corporate leave
+        date: Date of the corporate leave
+        leave_type: Type of leave (National Holiday, Festival, etc.)
+        is_recurring: Whether this is a recurring annual leave
+    """
+    name: str
+    date: date
+    leave_type: str = "National Holiday"
+    is_recurring: bool = True
+
+    class Config:
+        from_attributes = True
+
+
+class CorporateLeaveResponse(BaseModel):
+    """
+    Schema for corporate leave response.
+    
+    Attributes:
+        id: Corporate leave ID
+        name: Name/occasion of the corporate leave
+        date: Date of the corporate leave
+        leave_type: Type of leave
+        is_recurring: Whether this is recurring annually
+        created_at: Creation timestamp
+    """
+    id: int
+    name: str
+    date: date
+    leave_type: str
+    is_recurring: bool
+    created_at: Optional[date] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CorporateLeaveUpdate(BaseModel):
+    """
+    Schema for updating a corporate leave.
+    
+    Attributes:
+        name: Name/occasion of the corporate leave
+        date: Date of the corporate leave
+        leave_type: Type of leave
+        is_recurring: Whether this is recurring annually
+    """
+    name: Optional[str] = None
+    date: Optional[date] = None
+    leave_type: Optional[str] = None
+    is_recurring: Optional[bool] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CorporateLeaveCalendarResponse(BaseModel):
+    """
+    Schema for corporate leave calendar response.
+    
+    Attributes:
+        date: Date of the corporate leave
+        occasion: Name/occasion of the corporate leave
+        type: Type of leave
+        is_ai_generated: Whether this was AI generated or manually added
+    """
+    date: date
+    occasion: str
+    type: str
+    is_ai_generated: bool = False
 
     class Config:
         from_attributes = True

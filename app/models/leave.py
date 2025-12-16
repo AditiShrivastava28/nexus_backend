@@ -80,7 +80,36 @@ class LeaveBalance(Base):
     # Leave type for the balance (default to 'paid' as this is the main balance type)
     leave_type = Column(String, default="paid", nullable=False)
     
+
     # Relationships
     employee = relationship("Employee", back_populates="leave_balances")
 
     # paid_remaining helper removed -- use remaining_days directly
+
+
+
+class CorporateLeave(Base):
+    """
+    Corporate leave model for office-wide holidays and official leaves.
+    
+    Attributes:
+        id: Primary key
+        name: Name/occasion of the corporate leave
+        date: Date of the corporate leave
+        leave_type: Type of leave (National Holiday, Festival, etc.)
+        is_recurring: Whether this is a recurring annual leave
+        created_by: Admin user who created this leave
+        created_at: Creation timestamp
+    """
+    __tablename__ = "corporate_leaves"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    date = Column(Date, nullable=False)
+    leave_type = Column(String, nullable=False, default="National Holiday")
+    is_recurring = Column(String, default="true", nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by])
