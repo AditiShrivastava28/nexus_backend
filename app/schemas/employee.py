@@ -224,7 +224,40 @@ class TeamMemberResponse(BaseModel):
     status: Optional[str] = None
     location: Optional[str] = None
     img: Optional[str] = None
+
     isOnline: bool = False
 
     class Config:
         from_attributes = True
+
+
+class TeammateResponse(BaseModel):
+    """
+    Detailed team member response for teammates page.
+    
+    Attributes:
+        id: Employee ID
+        name: Full name
+        designation: Job title
+        department: Department
+        join_date: Date of joining
+        status: Employment status
+        location: Work location
+        avatar_url: Profile picture URL
+        email: Work email
+        mobile: Mobile number
+    """
+    id: int
+    name: str
+    designation: Optional[str] = None
+    department: Optional[str] = None
+    join_date: Optional[date] = None
+    status: Optional[str] = None
+    location: Optional[str] = None
+    avatar_url: Optional[str] = None
+    email: str
+    mobile: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+

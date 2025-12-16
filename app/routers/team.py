@@ -9,12 +9,14 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from ..database import get_db
+
 from ..models.user import User
 from ..models.employee import Employee
 from ..models.message import Message
-from ..schemas.employee import TeamMemberResponse
+from ..schemas.employee import TeamMemberResponse, TeammateResponse
 from ..schemas.message import MessageCreate, MessageResponse
 from ..utils.deps import get_current_user, get_current_employee
+
 
 
 router = APIRouter(prefix="/team", tags=["Team"])
@@ -61,6 +63,7 @@ def get_team_members(
             if colleague.id not in existing_ids:
                 team.append(colleague)
     
+
     return [TeamMemberResponse(
         id=emp.id,
         name=emp.user.full_name if emp.user else "Unknown",
@@ -72,7 +75,45 @@ def get_team_members(
     ) for emp in team]
 
 
+@router.get("/members", response_model=List[TeammateResponse])
+def get_all_teammates_details(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed list of all registered users/employees for the teammates page.
+    
+    Args:
+        current_employee: User's employee profile
+        db: Database session
+        
+    Returns:
+        List[TeammateResponse]: List of all employees with details
+    """
+    # Fetch all employees joined with users to ensure they are registered
+    # You might want to filter by status="active" depending on requirements
+    employees = db.query(Employee).join(User).filter(Employee.status == "active").all()
+    
+    result = []
+    for emp in employees:
+        result.append(TeammateResponse(
+            id=emp.id,
+            name=emp.user.full_name,
+            designation=emp.designation,
+            department=emp.department,
+            join_date=emp.join_date,
+            status=emp.status,
+            location=emp.location,
+            avatar_url=emp.avatar_url,
+            email=emp.user.email, # Use login email or personal_email if preferred
+            mobile=emp.mobile
+        ))
+        
+    return result
+
+
 @router.get("/{member_id}/messages", response_model=List[MessageResponse])
+
 def get_messages(
     member_id: int,
     current_employee: Employee = Depends(get_current_employee),
