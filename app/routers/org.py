@@ -62,9 +62,10 @@ def get_org_stats(
     Returns:
         dict: Organization stats
     """
+
     # Total employees
     total_employees = db.query(Employee).filter(
-        Employee.status == "active"
+        Employee.status.in_(["active", "full_time"])
     ).count()
     
     # New joiners (last 30 days)
@@ -76,12 +77,13 @@ def get_org_stats(
     # Open roles (placeholder - would need a roles/jobs table)
     open_roles = 5  # Placeholder
     
+
     # Department breakdown
     department_stats = db.query(
         Employee.department,
         func.count(Employee.id)
     ).filter(
-        Employee.status == "active"
+        Employee.status.in_(["active", "full_time"])
     ).group_by(Employee.department).all()
     
     departments = [

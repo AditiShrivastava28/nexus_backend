@@ -90,9 +90,10 @@ def get_all_teammates_details(
     Returns:
         List[TeammateResponse]: List of all employees with details
     """
+
     # Fetch all employees joined with users to ensure they are registered
-    # You might want to filter by status="active" depending on requirements
-    employees = db.query(Employee).join(User).filter(Employee.status == "active").all()
+    # You might want to filter by status="active" or "full_time" depending on requirements
+    employees = db.query(Employee).join(User).filter(Employee.status.in_(["active", "full_time"])).all()
     
     result = []
     for emp in employees:

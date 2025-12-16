@@ -107,6 +107,7 @@ class EmployeeService:
         user = AuthService.create_user(db, email, password, full_name, role)
         
         # Create employee profile
+
         employee = Employee(
             user_id=user.id,
             employee_id=employee_id,
@@ -115,7 +116,7 @@ class EmployeeService:
             join_date=join_date or date.today(),
             location=location,
             manager_id=manager_id,
-            status="active"
+            status="in-probation"
         )
         db.add(employee)
         db.commit()
@@ -249,11 +250,12 @@ class EmployeeService:
                         value = None
                     elif value == employee.id:
                         raise ValueError("Employee cannot be their own manager")
+
                     elif value is not None and value > 0:
-                        # Validate that the manager exists and is active
+                        # Validate that the manager exists and is active or full_time
                         manager = db.query(Employee).filter(
                             Employee.id == value,
-                            Employee.status == "active"
+                            Employee.status.in_(["active", "full_time"])
                         ).first()
                         if not manager:
                             raise ValueError("Manager not found or not active")
@@ -353,8 +355,9 @@ class EmployeeService:
         Returns:
             List[Employee]: List of potential managers
         """
+
         query = db.query(Employee).filter(
-            Employee.status == "active"
+            Employee.status.in_(["active", "full_time"])
         )
         
         if exclude_employee_id:
@@ -384,9 +387,10 @@ class EmployeeService:
         if not manager:
             raise ValueError("Manager not found")
         
-        # Check if manager is active
-        if manager.status != "active":
-            raise ValueError("Manager must be an active employee")
+
+        # Check if manager is active or full_time
+        if manager.status not in ["active", "full_time"]:
+            raise ValueError("Manager must be an active or full-time employee")
         
         # Only check employee-related validations if employee_id is provided (existing employee)
         if employee_id is not None:

@@ -54,9 +54,9 @@ class Employee(Base):
     address = Column(Text)
     personal_email = Column(String(255))
     mobile = Column(String(20))
+
     avatar_url = Column(String(500))
-    status = Column(String(50), default="active")
-    
+    status = Column(String(50), default="in-probation")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import engine, Base
+
 from .routers import (
     auth_router,
     me_router,
@@ -23,6 +24,7 @@ from .routers import (
     resume_router,
     requests_router,
     leaves_router,
+    employee_logs_router,
 )
 
 
@@ -60,6 +62,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
+
     # Include all routers with API prefix
     app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
     app.include_router(me_router, prefix=settings.API_V1_PREFIX)
@@ -72,6 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(inbox_router, prefix=settings.API_V1_PREFIX)
     app.include_router(admin_router, prefix=settings.API_V1_PREFIX)
     app.include_router(resume_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(employee_logs_router, prefix=settings.API_V1_PREFIX)
     
     @app.on_event("startup")
     async def startup_event():
@@ -146,6 +150,7 @@ def seed_initial_data():
         db.commit()
         db.refresh(admin_user)
         
+
         # Create admin employee profile
         admin_employee = Employee(
             user_id=admin_user.id,
@@ -154,7 +159,7 @@ def seed_initial_data():
             designation="HR Director",
             join_date=date.today() - timedelta(days=365),
             location="Headquarters",
-            status="active"
+            status="full_time"
         )
         db.add(admin_employee)
         db.commit()
@@ -192,6 +197,7 @@ def seed_initial_data():
         db.commit()
         db.refresh(manager_user)
         
+
         manager_employee = Employee(
             user_id=manager_user.id,
             employee_id="EMP002",
@@ -200,7 +206,7 @@ def seed_initial_data():
             join_date=date.today() - timedelta(days=300),
             location="Headquarters",
             manager_id=admin_employee.id,
-            status="active"
+            status="full_time"
         )
         db.add(manager_employee)
         db.commit()
@@ -237,6 +243,7 @@ def seed_initial_data():
         db.commit()
         db.refresh(employee_user)
         
+
         sample_employee = Employee(
             user_id=employee_user.id,
             employee_id="EMP003",
@@ -245,7 +252,7 @@ def seed_initial_data():
             join_date=date.today() - timedelta(days=100),
             location="Headquarters",
             manager_id=manager_employee.id,
-            status="active",
+            status="full_time",
             dob=date(1995, 5, 15),
             gender="Female",
             mobile="+1234567890"

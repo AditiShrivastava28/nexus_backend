@@ -485,8 +485,9 @@ def update_employee_status(
             detail="Employee not found"
         )
     
+
     # Validate status
-    valid_statuses = ["active", "on_leave", "terminated", "suspended"]
+    valid_statuses = ["full_time", "in-probation", "notice-period", "trainee", "active", "on_leave", "terminated"]
     if status_data.status not in valid_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
