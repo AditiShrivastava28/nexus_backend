@@ -127,6 +127,7 @@ class EarlyLateRequest(BaseModel):
     duration: float
 
 
+
 class EarlyLateResponse(BaseModel):
 
     """
@@ -134,6 +135,27 @@ class EarlyLateResponse(BaseModel):
     """
     message: str
     remaining_quota: int
+
+
+class HelpTicketHistoryItem(BaseModel):
+    """
+    Schema for help ticket history item.
+    """
+    subject: str
+    message_body: str
+    category: HelpCategory
+    recipients: List[str]
+    date: date
+
+
+class EarlyLateHistoryItem(BaseModel):
+    """
+    Schema for early/late request history item.
+    """
+    date: date
+    type: EarlyLateType
+    duration: float
+    reason: str
 
 
 class LeaveRequest(BaseRequest):

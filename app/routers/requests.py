@@ -20,6 +20,7 @@ from ..models.user import User, UserRole
 from typing import List
 
 
+
 from ..schemas.request import (
     WFHRequest,
     HelpRequest,
@@ -28,7 +29,9 @@ from ..schemas.request import (
     WFHHistoryItem,
     HelpTicketResponse,
     EarlyLateRequest,
-    EarlyLateResponse
+    EarlyLateResponse,
+    HelpTicketHistoryItem,
+    EarlyLateHistoryItem
 )
 from ..schemas.leave import LeaveRequest, LeaveApplyResponse
 
@@ -72,6 +75,96 @@ def get_wfh_history(
             end_date=req.end_date,
             number_of_days=total_days,
             reason=req.description
+        ))
+        
+
+    return history
+
+
+@router.get("/help", response_model=List[HelpTicketHistoryItem])
+def get_help_history(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get help ticket history for the current employee.
+    
+    Args:
+        current_employee: User's employee profile
+        db: Database session
+        
+    Returns:
+        List[HelpTicketHistoryItem]: List of help tickets
+    """
+    requests = db.query(Request).filter(
+        Request.requester_id == current_employee.id,
+        Request.request_type == "help"
+    ).order_by(Request.date.desc()).all()
+
+    history = []
+    for req in requests:
+        try:
+            details = json.loads(req.details)
+            recipient_ids = details.get("recipients", [])
+            category = details.get("category", "Other")
+        except (json.JSONDecodeError, TypeError):
+            recipient_ids = []
+            category = "Other"
+            
+        # Get recipient names
+        recipient_names = []
+        if recipient_ids:
+            recipients = db.query(Employee).filter(Employee.id.in_(recipient_ids)).all()
+            for recipient in recipients:
+                if recipient.user:
+                    recipient_names.append(recipient.user.full_name)
+            
+        history.append(HelpTicketHistoryItem(
+            subject=req.title or "Help Ticket",
+            message_body=req.description or "",
+            category=category,
+            recipients=recipient_names,
+            date=req.date
+        ))
+        
+    return history
+
+
+@router.get("/early-late", response_model=List[EarlyLateHistoryItem])
+def get_early_late_history(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get early going/late coming request history for the current employee.
+    
+    Args:
+        current_employee: User's employee profile
+        db: Database session
+        
+    Returns:
+        List[EarlyLateHistoryItem]: List of early/late requests
+    """
+    requests = db.query(Request).filter(
+        Request.requester_id == current_employee.id,
+        Request.request_type == "early_late"
+    ).order_by(Request.date.desc()).all()
+
+    history = []
+    for req in requests:
+        try:
+            details = json.loads(req.details)
+            request_type = details.get("type", "early_going")
+            duration = details.get("duration", 0.0)
+        except (json.JSONDecodeError, TypeError):
+            request_type = "early_going"
+            duration = 0.0
+            
+        history.append(EarlyLateHistoryItem(
+            date=req.date,
+            type=request_type,
+            duration=duration,
+            reason=req.description or ""
         ))
         
     return history
