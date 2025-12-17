@@ -24,7 +24,7 @@ from .routers import (
     resume_router,
     requests_router,
     leaves_router,
-    employee_logs_router,
+    employee_logs,
 )
 
 
@@ -75,7 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(inbox_router, prefix=settings.API_V1_PREFIX)
     app.include_router(admin_router, prefix=settings.API_V1_PREFIX)
     app.include_router(resume_router, prefix=settings.API_V1_PREFIX)
-    app.include_router(employee_logs_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(employee_logs, prefix=settings.API_V1_PREFIX)
     
     @app.on_event("startup")
     async def startup_event():
