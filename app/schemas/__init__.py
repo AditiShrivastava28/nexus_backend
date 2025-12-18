@@ -5,6 +5,7 @@ This package contains all the Pydantic models used for API
 request validation and response serialization.
 """
 
+
 from .user import *
 from .employee import *
 from .attendance import *
@@ -13,4 +14,5 @@ from .asset import *
 from .document import *
 from .message import *
 from .salary import *
+from .salary_admin import *
 from .request import *
