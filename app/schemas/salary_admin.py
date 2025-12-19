@@ -1,3 +1,4 @@
+
 """
 Admin-specific salary-related Pydantic schemas.
 
@@ -46,6 +47,8 @@ class SalaryCreate(BaseModel):
     increment_cycle: str = Field(default="annual", description="Increment cycle")
 
 
+
+
 class SalaryUpdate(BaseModel):
     """
     Schema for updating employee salary.
@@ -53,34 +56,33 @@ class SalaryUpdate(BaseModel):
     All fields are optional for partial updates.
     
     Attributes:
-        annual_ctc: Annual cost to company
-        monthly_gross: Monthly gross salary
-        basic: Basic salary component
-        hra: House rent allowance
-        special_allowance: Special allowance
-        pf_deduction: Provident fund deduction
-        tax_deduction: Tax deduction
-        total_deductions: Total deductions (auto-calculated if not provided)
-        net_pay: Net take-home pay (auto-calculated if not provided)
+        annual_ctc: Annual cost to company (None = not provided, 0 = explicitly set to 0)
+        monthly_gross: Monthly gross salary (None = not provided, 0 = explicitly set to 0)
+        basic: Basic salary component (None = not provided, 0 = explicitly set to 0)
+        hra: House rent allowance (None = not provided, 0 = explicitly set to 0)
+        special_allowance: Special allowance (None = not provided, 0 = explicitly set to 0)
+        pf_deduction: Provident fund deduction (None = not provided, 0 = explicitly set to 0)
+        tax_deduction: Tax deduction (None = not provided, 0 = explicitly set to 0)
+        total_deductions: Total deductions (None = not provided, 0 = explicitly set to 0)
+        net_pay: Net take-home pay (None = not provided, 0 = explicitly set to 0)
         currency: Currency code
         next_pay_date: Next payment date
         next_increment_date: Next increment date
         increment_cycle: Increment cycle
     """
-    annual_ctc: Optional[float] = Field(default=None, description="Annual cost to company")
-    monthly_gross: Optional[float] = Field(default=None, description="Monthly gross salary")
-    basic: Optional[float] = Field(default=None, description="Basic salary component")
-    hra: Optional[float] = Field(default=None, description="House rent allowance")
-    special_allowance: Optional[float] = Field(default=None, description="Special allowance")
-    pf_deduction: Optional[float] = Field(default=None, description="Provident fund deduction")
-    tax_deduction: Optional[float] = Field(default=None, description="Tax deduction")
-    total_deductions: Optional[float] = Field(default=None, description="Total deductions (auto-calculated if not provided)")
-    net_pay: Optional[float] = Field(default=None, description="Net take-home pay (auto-calculated if not provided)")
+    annual_ctc: Optional[float] = Field(default=None, description="Annual cost to company (None = not provided, 0 = explicitly set to 0)")
+    monthly_gross: Optional[float] = Field(default=None, description="Monthly gross salary (None = not provided, 0 = explicitly set to 0)")
+    basic: Optional[float] = Field(default=None, description="Basic salary component (None = not provided, 0 = explicitly set to 0)")
+    hra: Optional[float] = Field(default=None, description="House rent allowance (None = not provided, 0 = explicitly set to 0)")
+    special_allowance: Optional[float] = Field(default=None, description="Special allowance (None = not provided, 0 = explicitly set to 0)")
+    pf_deduction: Optional[float] = Field(default=None, description="Provident fund deduction (None = not provided, 0 = explicitly set to 0)")
+    tax_deduction: Optional[float] = Field(default=None, description="Tax deduction (None = not provided, 0 = explicitly set to 0)")
+    total_deductions: Optional[float] = Field(default=None, description="Total deductions (None = not provided, 0 = explicitly set to 0)")
+    net_pay: Optional[float] = Field(default=None, description="Net take-home pay (None = not provided, 0 = explicitly set to 0)")
     currency: Optional[str] = Field(default=None, description="Currency code")
     next_pay_date: Optional[date] = Field(default=None, description="Next payment date")
     next_increment_date: Optional[date] = Field(default=None, description="Next increment date")
     increment_cycle: Optional[str] = Field(default=None, description="Increment cycle")
-
 
 class SalaryResponse(BaseModel):
     """
@@ -191,6 +193,8 @@ class SalaryCalculationResponse(BaseModel):
 
 
 
+
+
 class SalaryCreateAdmin(BaseModel):
     """
     Schema for creating/updating employee salary by admin.
@@ -198,13 +202,13 @@ class SalaryCreateAdmin(BaseModel):
     This schema is used for the upsert endpoint where employee_id is passed as path parameter.
     
     Attributes:
-        annual_ctc: Annual cost to company
-        monthly_gross: Monthly gross salary
-        basic: Basic salary component
-        hra: House rent allowance
-        special_allowance: Special allowance
-        pf_deduction: Provident fund deduction
-        tax_deduction: Tax deduction
+        annual_ctc: Annual cost to company (None = not provided)
+        monthly_gross: Monthly gross salary (None = not provided)
+        basic: Basic salary component (None = not provided, 0 = explicitly set to 0)
+        hra: House rent allowance (None = not provided, 0 = explicitly set to 0)
+        special_allowance: Special allowance (None = not provided, 0 = explicitly set to 0)
+        pf_deduction: Provident fund deduction (None = not provided, 0 = explicitly set to 0)
+        tax_deduction: Tax deduction (None = not provided, 0 = explicitly set to 0)
         total_deductions: Total deductions (auto-calculated if not provided)
         net_pay: Net take-home pay (auto-calculated if not provided)
         currency: Currency code
@@ -220,13 +224,13 @@ class SalaryCreateAdmin(BaseModel):
         calculate_hra: Whether to auto-calculate HRA
         overrides: Manual overrides for specific components
     """
-    annual_ctc: float = Field(default=0.0, description="Annual cost to company")
-    monthly_gross: float = Field(default=0.0, description="Monthly gross salary")
-    basic: float = Field(default=0.0, description="Basic salary component")
-    hra: float = Field(default=0.0, description="House rent allowance")
-    special_allowance: float = Field(default=0.0, description="Special allowance")
-    pf_deduction: float = Field(default=0.0, description="Provident fund deduction")
-    tax_deduction: float = Field(default=0.0, description="Tax deduction")
+    annual_ctc: Optional[float] = Field(default=None, description="Annual cost to company (None = not provided)")
+    monthly_gross: Optional[float] = Field(default=None, description="Monthly gross salary (None = not provided)")
+    basic: Optional[float] = Field(default=None, description="Basic salary component (None = not provided, 0 = explicitly set to 0)")
+    hra: Optional[float] = Field(default=None, description="House rent allowance (None = not provided, 0 = explicitly set to 0)")
+    special_allowance: Optional[float] = Field(default=None, description="Special allowance (None = not provided, 0 = explicitly set to 0)")
+    pf_deduction: Optional[float] = Field(default=None, description="Provident fund deduction (None = not provided, 0 = explicitly set to 0)")
+    tax_deduction: Optional[float] = Field(default=None, description="Tax deduction (None = not provided, 0 = explicitly set to 0)")
     total_deductions: Optional[float] = Field(default=None, description="Total deductions (auto-calculated if not provided)")
     net_pay: Optional[float] = Field(default=None, description="Net take-home pay (auto-calculated if not provided)")
     currency: str = Field(default="INR", description="Currency code")

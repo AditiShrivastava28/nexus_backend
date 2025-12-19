@@ -1599,24 +1599,59 @@ def create_or_update_employee_salary_admin(
     # Check if salary already exists for this employee
     existing_salary = db.query(Salary).filter(Salary.employee_id == employee_id).first()
     
-    # Initialize variables
-    basic = salary_data.basic
-    hra = salary_data.hra
-    special_allowance = salary_data.special_allowance
-    pf_deduction = salary_data.pf_deduction
-    tax_deduction = salary_data.tax_deduction
-    monthly_gross = salary_data.monthly_gross
-    total_deductions = salary_data.total_deductions
-    net_pay = salary_data.net_pay
-    annual_ctc = salary_data.annual_ctc
+
+
+    # Track which fields were explicitly provided (not None)
+    provided_fields = {}
+    if salary_data.annual_ctc is not None:
+        provided_fields['annual_ctc'] = salary_data.annual_ctc
+    if salary_data.monthly_gross is not None:
+        provided_fields['monthly_gross'] = salary_data.monthly_gross
+    if salary_data.basic is not None:
+        provided_fields['basic'] = salary_data.basic
+    if salary_data.hra is not None:
+        provided_fields['hra'] = salary_data.hra
+    if salary_data.special_allowance is not None:
+        provided_fields['special_allowance'] = salary_data.special_allowance
+    if salary_data.pf_deduction is not None:
+        provided_fields['pf_deduction'] = salary_data.pf_deduction
+    if salary_data.tax_deduction is not None:
+        provided_fields['tax_deduction'] = salary_data.tax_deduction
+    
+    # Initialize variables - use existing salary values if not provided
+    if existing_salary:
+        basic = salary_data.basic if salary_data.basic is not None else existing_salary.basic
+        hra = salary_data.hra if salary_data.hra is not None else existing_salary.hra
+        special_allowance = salary_data.special_allowance if salary_data.special_allowance is not None else existing_salary.special_allowance
+        pf_deduction = salary_data.pf_deduction if salary_data.pf_deduction is not None else existing_salary.pf_deduction
+        tax_deduction = salary_data.tax_deduction if salary_data.tax_deduction is not None else existing_salary.tax_deduction
+        monthly_gross = salary_data.monthly_gross if salary_data.monthly_gross is not None else existing_salary.monthly_gross
+        total_deductions = salary_data.total_deductions if salary_data.total_deductions is not None else existing_salary.total_deductions
+        net_pay = salary_data.net_pay if salary_data.net_pay is not None else existing_salary.net_pay
+        annual_ctc = salary_data.annual_ctc if salary_data.annual_ctc is not None else existing_salary.annual_ctc
+        currency = salary_data.currency if salary_data.currency else existing_salary.currency
+    else:
+        # For new salary, use defaults
+        basic = salary_data.basic if salary_data.basic is not None else 0.0
+        hra = salary_data.hra if salary_data.hra is not None else 0.0
+        special_allowance = salary_data.special_allowance if salary_data.special_allowance is not None else 0.0
+        pf_deduction = salary_data.pf_deduction if salary_data.pf_deduction is not None else 0.0
+        tax_deduction = salary_data.tax_deduction if salary_data.tax_deduction is not None else 0.0
+        monthly_gross = salary_data.monthly_gross if salary_data.monthly_gross is not None else 0.0
+        total_deductions = salary_data.total_deductions if salary_data.total_deductions is not None else 0.0
+        net_pay = salary_data.net_pay if salary_data.net_pay is not None else 0.0
+        annual_ctc = salary_data.annual_ctc if salary_data.annual_ctc is not None else 0.0
+        currency = salary_data.currency
     
     # Auto-calculation logic
     use_auto_calculation = False
     
-    # Check if only annual_ctc and/or monthly_gross are provided (auto-calculation mode)
-    if ((annual_ctc > 0 or monthly_gross > 0) and 
-        basic == 0 and hra == 0 and special_allowance == 0 and 
-        pf_deduction == 0 and tax_deduction == 0):
+    # Explicit auto-calculation takes precedence
+    if salary_data.auto_calculate:
+        use_auto_calculation = True
+    # Auto-calculate only if no basic components are provided and we have annual_ctc or monthly_gross
+    elif (not any(field in provided_fields for field in ['basic', 'hra', 'special_allowance']) and 
+          (annual_ctc > 0 or monthly_gross > 0)):
         use_auto_calculation = True
     
     try:
@@ -1658,20 +1693,58 @@ def create_or_update_employee_salary_admin(
             net_pay = auto_result.net_pay
             annual_ctc = auto_result.annual_ctc
             
+
+
         else:
-            # Manual calculation or use provided values
-            if monthly_gross == 0 and basic > 0:
-                monthly_gross, total_deductions, net_pay, annual_ctc = calculate_salary_components(
-                    basic, hra, special_allowance, pf_deduction, tax_deduction
-                )
-            elif total_deductions is None:
+            # Manual calculation or selective updates
+            # Handle different update scenarios:
+            
+            # Scenario 1: Only deductions provided (no basic components)
+            if (not any(field in provided_fields for field in ['basic', 'hra', 'special_allowance', 'annual_ctc', 'monthly_gross']) and
+                any(field in provided_fields for field in ['pf_deduction', 'tax_deduction'])):
+                # Only update deductions and recalculate total_deductions and net_pay
+                # Preserve existing basic components and gross salary
                 total_deductions = pf_deduction + tax_deduction
-            
-            if net_pay is None:
                 net_pay = monthly_gross - total_deductions
-            
-            if annual_ctc == 0 and monthly_gross > 0:
-                annual_ctc = monthly_gross * 12
+                # Keep annual_ctc unchanged unless explicitly provided
+                
+            # Scenario 2: Basic components provided
+            elif any(field in provided_fields for field in ['basic', 'hra', 'special_allowance']):
+                # Recalculate monthly_gross from basic components
+                if monthly_gross == 0:
+                    monthly_gross = basic + hra + special_allowance
+                total_deductions = pf_deduction + tax_deduction
+                net_pay = monthly_gross - total_deductions
+                # Only calculate annual_ctc if not explicitly provided
+                if 'annual_ctc' not in provided_fields:
+                    annual_ctc = monthly_gross * 12
+                    
+            # Scenario 3: Only annual_ctc provided
+            elif 'annual_ctc' in provided_fields and not any(field in provided_fields for field in ['basic', 'hra', 'special_allowance', 'monthly_gross']):
+                # Update annual_ctc and recalculate monthly_gross, but preserve basic components
+                if monthly_gross == 0:
+                    monthly_gross = annual_ctc / 12
+                # Only calculate basic components if they are currently 0
+                if basic == 0:
+                    basic = monthly_gross * 0.4  # Default 40% for basic
+                if hra == 0:
+                    hra = monthly_gross * 0.2   # Default 20% for HRA
+                if special_allowance == 0:
+                    special_allowance = monthly_gross - basic - hra
+                    
+                total_deductions = pf_deduction + tax_deduction
+                net_pay = monthly_gross - total_deductions
+                
+            # Scenario 4: Mixed updates
+            else:
+                # Handle mixed scenarios
+                if 'annual_ctc' in provided_fields and 'monthly_gross' not in provided_fields:
+                    monthly_gross = annual_ctc / 12
+                elif 'monthly_gross' in provided_fields and 'annual_ctc' not in provided_fields:
+                    annual_ctc = monthly_gross * 12
+                    
+                total_deductions = pf_deduction + tax_deduction
+                net_pay = monthly_gross - total_deductions
         
 
 
@@ -1804,6 +1877,24 @@ def update_employee_salary_admin(
             detail="Salary information not found for this employee"
         )
     
+
+    # Track which fields were explicitly provided (not None)
+    provided_fields = {}
+    if salary_data.annual_ctc is not None:
+        provided_fields['annual_ctc'] = salary_data.annual_ctc
+    if salary_data.monthly_gross is not None:
+        provided_fields['monthly_gross'] = salary_data.monthly_gross
+    if salary_data.basic is not None:
+        provided_fields['basic'] = salary_data.basic
+    if salary_data.hra is not None:
+        provided_fields['hra'] = salary_data.hra
+    if salary_data.special_allowance is not None:
+        provided_fields['special_allowance'] = salary_data.special_allowance
+    if salary_data.pf_deduction is not None:
+        provided_fields['pf_deduction'] = salary_data.pf_deduction
+    if salary_data.tax_deduction is not None:
+        provided_fields['tax_deduction'] = salary_data.tax_deduction
+    
     # Update fields that are provided
     update_data = {}
     if salary_data.annual_ctc is not None:
@@ -1829,28 +1920,81 @@ def update_employee_salary_admin(
     if salary_data.increment_cycle is not None:
         update_data['increment_cycle'] = salary_data.increment_cycle
     
-    # Recalculate derived values if basic components changed
-    if any(field in update_data for field in ['basic', 'hra', 'special_allowance', 'pf_deduction', 'tax_deduction']):
-        basic = update_data.get('basic', salary.basic)
-        hra = update_data.get('hra', salary.hra)
-        special_allowance = update_data.get('special_allowance', salary.special_allowance)
-        pf_deduction = update_data.get('pf_deduction', salary.pf_deduction)
-        tax_deduction = update_data.get('tax_deduction', salary.tax_deduction)
+    # Handle selective salary updates with smart recalculation
+    if any(field in provided_fields for field in ['basic', 'hra', 'special_allowance', 'pf_deduction', 'tax_deduction']):
+        # Get current values or provided values
+        basic = salary_data.basic if salary_data.basic is not None else salary.basic
+        hra = salary_data.hra if salary_data.hra is not None else salary.hra
+        special_allowance = salary_data.special_allowance if salary_data.special_allowance is not None else salary.special_allowance
+        pf_deduction = salary_data.pf_deduction if salary_data.pf_deduction is not None else salary.pf_deduction
+        tax_deduction = salary_data.tax_deduction if salary_data.tax_deduction is not None else salary.tax_deduction
         
-        monthly_gross, total_deductions, net_pay, annual_ctc = calculate_salary_components(
-            basic, hra, special_allowance, pf_deduction, tax_deduction
-        )
-        
+        # Handle different scenarios
+        if (not any(field in provided_fields for field in ['basic', 'hra', 'special_allowance']) and
+            any(field in provided_fields for field in ['pf_deduction', 'tax_deduction'])):
+            # Only deductions provided - update deductions and net_pay, preserve other components
+            current_basic = salary.basic
+            current_hra = salary.hra
+            current_special_allowance = salary.special_allowance
+            current_monthly_gross = salary.monthly_gross
+            
+            total_deductions = pf_deduction + tax_deduction
+            net_pay = current_monthly_gross - total_deductions
+            annual_ctc = salary.annual_ctc  # Keep unchanged unless explicitly provided
+            
+            update_data['pf_deduction'] = pf_deduction
+            update_data['tax_deduction'] = tax_deduction
+            update_data['total_deductions'] = total_deductions
+            update_data['net_pay'] = net_pay
+            if 'annual_ctc' not in provided_fields:
+                update_data['annual_ctc'] = annual_ctc
+                
+        elif any(field in provided_fields for field in ['basic', 'hra', 'special_allowance']):
+            # Basic components provided - recalculate from basic components
+            monthly_gross = basic + hra + special_allowance
+            total_deductions = pf_deduction + tax_deduction
+            net_pay = monthly_gross - total_deductions
+            annual_ctc = salary.annual_ctc  # Keep existing unless explicitly provided
+            
+            update_data['basic'] = basic
+            update_data['hra'] = hra
+            update_data['special_allowance'] = special_allowance
+            update_data['pf_deduction'] = pf_deduction
+            update_data['tax_deduction'] = tax_deduction
+            update_data['monthly_gross'] = monthly_gross
+            update_data['total_deductions'] = total_deductions
+            update_data['net_pay'] = net_pay
+            if 'annual_ctc' not in provided_fields:
+                update_data['annual_ctc'] = annual_ctc
+                
+        else:
+            # Fallback for mixed updates
+            monthly_gross, total_deductions, net_pay, annual_ctc = calculate_salary_components(
+                basic, hra, special_allowance, pf_deduction, tax_deduction
+            )
+            update_data['monthly_gross'] = monthly_gross
+            update_data['total_deductions'] = total_deductions
+            update_data['net_pay'] = net_pay
+            if 'annual_ctc' not in provided_fields:
+                update_data['annual_ctc'] = annual_ctc
+                
+    elif 'annual_ctc' in provided_fields and 'monthly_gross' not in provided_fields:
+        # Only annual_ctc provided - update it and recalculate monthly_gross
+        monthly_gross = salary_data.annual_ctc / 12
+        update_data['annual_ctc'] = salary_data.annual_ctc
         update_data['monthly_gross'] = monthly_gross
-        update_data['total_deductions'] = total_deductions
-        update_data['net_pay'] = net_pay
+        
+    elif 'monthly_gross' in provided_fields and 'annual_ctc' not in provided_fields:
+        # Only monthly_gross provided - update it and recalculate annual_ctc
+        annual_ctc = salary_data.monthly_gross * 12
+        update_data['monthly_gross'] = salary_data.monthly_gross
         update_data['annual_ctc'] = annual_ctc
-    else:
-        # Update total_deductions and net_pay if explicitly provided
-        if salary_data.total_deductions is not None:
-            update_data['total_deductions'] = salary_data.total_deductions
-        if salary_data.net_pay is not None:
-            update_data['net_pay'] = salary_data.net_pay
+    
+    # Handle explicitly provided total_deductions and net_pay
+    if salary_data.total_deductions is not None:
+        update_data['total_deductions'] = salary_data.total_deductions
+    if salary_data.net_pay is not None:
+        update_data['net_pay'] = salary_data.net_pay
     
     # Apply updates
     for field, value in update_data.items():
