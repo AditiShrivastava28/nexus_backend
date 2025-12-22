@@ -59,6 +59,7 @@ class Salary(Base):
     employee = relationship("Employee", back_populates="salary")
 
 
+
 class Payslip(Base):
     """
     Monthly payslip record.
@@ -71,6 +72,23 @@ class Payslip(Base):
         amount: Net amount paid
         status: Payment status (paid, processing)
         file_url: URL to payslip PDF
+        basic_paid: Basic salary paid amount
+        basic_actual: Basic salary actual amount
+        hra_paid: HRA paid amount
+        hra_actual: HRA actual amount
+        medical_allowance_paid: Medical allowance paid
+        medical_allowance_actual: Medical allowance actual
+        conveyance_allowance_paid: Conveyance allowance paid
+        conveyance_allowance_actual: Conveyance allowance actual
+        total_earnings_paid: Total earnings paid
+        total_earnings_actual: Total earnings actual
+        professional_tax: Professional tax deduction
+        total_deductions: Total deductions
+        actual_payable_days: Days actually payable
+        total_working_days: Total working days in month
+        loss_of_pay_days: Loss of pay days
+        days_payable: Net payable days
+        leave_deduction_amount: Amount deducted for unpaid leaves
     """
     __tablename__ = "payslips"
     
@@ -82,7 +100,58 @@ class Payslip(Base):
     status = Column(String(50), default="processing")
     file_url = Column(String(500))
     
+    # Salary components for detailed payslip
+    basic_paid = Column(Float, default=0)
+    basic_actual = Column(Float, default=0)
+    hra_paid = Column(Float, default=0)
+    hra_actual = Column(Float, default=0)
+    medical_allowance_paid = Column(Float, default=0)
+    medical_allowance_actual = Column(Float, default=0)
+    conveyance_allowance_paid = Column(Float, default=0)
+    conveyance_allowance_actual = Column(Float, default=0)
+    total_earnings_paid = Column(Float, default=0)
+    total_earnings_actual = Column(Float, default=0)
+    professional_tax = Column(Float, default=0)
+    total_deductions = Column(Float, default=0)
+    
+    # Working days calculations
+    actual_payable_days = Column(Float, default=0)
+    total_working_days = Column(Float, default=0)
+    loss_of_pay_days = Column(Float, default=0)
+    days_payable = Column(Float, default=0)
+    leave_deduction_amount = Column(Float, default=0)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    processed_at = Column(DateTime(timezone=True))
     
     # Relationships
     employee = relationship("Employee", back_populates="payslips")
+
+
+class MonthlySalaryProcessing(Base):
+    """
+    Monthly salary processing tracking.
+    
+    Attributes:
+        id: Primary key
+        month: Month (1-12)
+        year: Year
+        processed_date: When the processing was done
+        total_employees: Total employees processed
+        successful_payments: Number of successful payments
+        failed_payments: Number of failed payments
+        total_processed_amount: Total amount processed
+        status: Processing status (pending, completed, failed)
+    """
+    __tablename__ = "monthly_salary_processing"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    month = Column(Integer, nullable=False)
+    year = Column(Integer, nullable=False)
+    processed_date = Column(DateTime(timezone=True))
+    total_employees = Column(Integer, default=0)
+    successful_payments = Column(Integer, default=0)
+    failed_payments = Column(Integer, default=0)
+    total_processed_amount = Column(Float, default=0)
+    status = Column(String(50), default="pending")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

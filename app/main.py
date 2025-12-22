@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .database import engine, Base
 
+
+
 from .routers import (
     auth_router,
     me_router,
@@ -63,7 +65,9 @@ def create_app() -> FastAPI:
     )
     
 
+
     # Include all routers with API prefix
+
     app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
     app.include_router(me_router, prefix=settings.API_V1_PREFIX)
     app.include_router(attendance_router, prefix=settings.API_V1_PREFIX)

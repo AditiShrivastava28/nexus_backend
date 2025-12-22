@@ -6,21 +6,27 @@ and administrative operations.
 """
 
 
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, func
 from typing import List, Optional
 from datetime import date, datetime
 
 
 
+
 from ..database import get_db
+
 from ..models.user import User
 from ..models.employee import Employee
 from ..models.attendance import Attendance
 from ..models.leave import Leave, LeaveBalance
 from ..models.request import Request
 from ..models.message import Message
-from ..models.salary import Salary, Payslip
+from ..models.salary import Salary, Payslip, MonthlySalaryProcessing
+
+from ..services.leave_based_salary import LeaveBasedSalaryCalculationService
 
 
 from ..schemas.employee import (
@@ -43,6 +49,7 @@ from ..schemas.admin import (
 )
 
 
+
 from ..schemas.salary_admin import (
     SalaryCreate,
     SalaryUpdate,
@@ -58,6 +65,14 @@ from ..schemas.salary_admin import (
     SalaryValidationResponse
 )
 
+from ..schemas.admin_salary_apis import (
+    CTCBreakdownResponse,
+    MonthlySalaryValidationResponse,
+    PayslipGenerationResponse
+)
+
+
+
 from ..schemas.salary import (
     SalaryDetailsResponse,
     PayCycleResponse,
@@ -65,12 +80,26 @@ from ..schemas.salary import (
     FinancesResponse
 )
 
+
 from ..schemas.payment_processing import (
     SinglePaymentProcessRequest,
     SinglePaymentProcessResponse,
     BulkPaymentProcessRequest,
     BulkPaymentProcessResponse,
     UnpaidSalariesCheckResponse
+)
+
+
+from ..schemas.leave_salary_processing import (
+    LeaveBasedSalaryProcessingRequest,
+    LeaveBasedSalaryProcessingResponse,
+    BulkLeaveProcessingRequest,
+    MonthlyProcessingStatus,
+    SingleEmployeeLeaveProcessingRequest,
+    SingleEmployeeLeaveProcessingResponse,
+    DetailedPayslipResponse,
+    PayslipFormatResponse,
+    LeaveBalanceCheck
 )
 
 from ..services.employee import EmployeeService
@@ -2707,6 +2736,7 @@ def check_unpaid_salaries(
     
     unpaid_employees = len(unpaid_employee_details)
     
+
     return UnpaidSalariesCheckResponse(
         total_employees=total_employees,
         paid_employees=paid_employees,
@@ -2714,3 +2744,926 @@ def check_unpaid_salaries(
         unpaid_employee_details=unpaid_employee_details,
         check_date=date.today()
     )
+
+
+# Leave-Based Salary Processing Endpoints
+
+@router.post("/salary/leave-processing/single", response_model=LeaveBasedSalaryProcessingResponse)
+def process_leave_based_salary_single(
+    processing_request: LeaveBasedSalaryProcessingRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Process leave-based salary for a single employee (admin only).
+    
+    Args:
+        processing_request: Leave-based salary processing request
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        LeaveBasedSalaryProcessingResponse: Processing result
+    """
+    check_admin_access(current_user)
+    
+    try:
+        # Initialize the leave-based salary calculation service
+        leave_service = LeaveBasedSalaryCalculationService()
+        
+        # Process the leave-based salary
+        result = leave_service.calculate_leave_based_salary(
+            employee_id=processing_request.employee_id,
+            month=processing_request.month,
+            year=processing_request.year,
+            deductions_only=processing_request.deductions_only,
+            custom_leave_deductions=processing_request.custom_leave_deductions
+        )
+        
+        # Update or create payslip with leave-based calculations
+        employee = EmployeeService.get_employee_by_id(db, processing_request.employee_id)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        # Find or create payslip
+        payslip = db.query(Payslip).filter(
+            Payslip.employee_id == processing_request.employee_id,
+            Payslip.month == processing_request.month,
+            Payslip.year == processing_request.year
+        ).first()
+        
+        if not payslip:
+            payslip = Payslip(
+                employee_id=processing_request.employee_id,
+                month=processing_request.month,
+                year=processing_request.year,
+                amount=result.net_payable_amount,
+                status="processing"
+            )
+            db.add(payslip)
+        else:
+            payslip.amount = result.net_payable_amount
+        
+        # Update payslip with detailed leave-based salary data
+        payslip.basic_paid = result.basic_paid
+        payslip.basic_actual = result.basic_actual
+        payslip.hra_paid = result.hra_paid
+        payslip.hra_actual = result.hra_actual
+        payslip.medical_allowance_paid = result.medical_allowance_paid
+        payslip.medical_allowance_actual = result.medical_allowance_actual
+        payslip.conveyance_allowance_paid = result.conveyance_allowance_paid
+        payslip.conveyance_allowance_actual = result.conveyance_allowance_actual
+        payslip.total_earnings_paid = result.total_earnings_paid
+        payslip.total_earnings_actual = result.total_earnings_actual
+        payslip.professional_tax = result.professional_tax
+        payslip.total_deductions = result.total_deductions
+        payslip.actual_payable_days = result.actual_payable_days
+        payslip.total_working_days = result.total_working_days
+        payslip.loss_of_pay_days = result.loss_of_pay_days
+        payslip.days_payable = result.days_payable
+        payslip.leave_deduction_amount = result.leave_deduction_amount
+        
+        db.commit()
+        db.refresh(payslip)
+        
+        return LeaveBasedSalaryProcessingResponse(
+            success=True,
+            employee_id=processing_request.employee_id,
+            employee_name=employee.user.full_name if employee.user else "Unknown",
+            month=processing_request.month,
+            year=processing_request.year,
+            basic_paid=result.basic_paid,
+            basic_actual=result.basic_actual,
+            hra_paid=result.hra_paid,
+            hra_actual=result.hra_actual,
+            medical_allowance_paid=result.medical_allowance_paid,
+            medical_allowance_actual=result.medical_allowance_actual,
+            conveyance_allowance_paid=result.conveyance_allowance_paid,
+            conveyance_allowance_actual=result.conveyance_allowance_actual,
+            total_earnings_paid=result.total_earnings_paid,
+            total_earnings_actual=result.total_earnings_actual,
+            professional_tax=result.professional_tax,
+            total_deductions=result.total_deductions,
+            actual_payable_days=result.actual_payable_days,
+            total_working_days=result.total_working_days,
+            loss_of_pay_days=result.loss_of_pay_days,
+            days_payable=result.days_payable,
+            leave_deduction_amount=result.leave_deduction_amount,
+            gross_payable_amount=result.gross_payable_amount,
+            net_payable_amount=result.net_payable_amount,
+            processed_at=datetime.now()
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing leave-based salary: {str(e)}"
+        )
+
+
+@router.post("/salary/leave-processing/bulk", response_model=List[LeaveBasedSalaryProcessingResponse])
+def process_leave_based_salary_bulk(
+    bulk_request: BulkLeaveProcessingRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Process leave-based salary for multiple employees (admin only).
+    
+    Args:
+        bulk_request: Bulk leave processing request
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        List[LeaveBasedSalaryProcessingResponse]: Processing results for all employees
+    """
+    check_admin_access(current_user)
+    
+    results = []
+    
+    # Get employees to process
+    if bulk_request.employee_ids:
+        # Process specific employees
+        employees = db.query(Employee).filter(Employee.id.in_(bulk_request.employee_ids)).all()
+    else:
+        # Process all active employees
+        employees = db.query(Employee).filter(
+            Employee.status.in_(["active", "full_time", "in-probation"])
+        ).all()
+    
+    total_employees = len(employees)
+    processed_count = 0
+    
+    for employee in employees:
+        try:
+            # Initialize the leave-based salary calculation service
+            leave_service = LeaveBasedSalaryCalculationService()
+            
+            # Process the leave-based salary
+            result = leave_service.calculate_leave_based_salary(
+                employee_id=employee.id,
+                month=bulk_request.month,
+                year=bulk_request.year,
+                deductions_only=bulk_request.deductions_only,
+                custom_leave_deductions=bulk_request.custom_leave_deductions
+            )
+            
+            # Update or create payslip with leave-based calculations
+            payslip = db.query(Payslip).filter(
+                Payslip.employee_id == employee.id,
+                Payslip.month == bulk_request.month,
+                Payslip.year == bulk_request.year
+            ).first()
+            
+            if not payslip:
+                payslip = Payslip(
+                    employee_id=employee.id,
+                    month=bulk_request.month,
+                    year=bulk_request.year,
+                    amount=result.net_payable_amount,
+                    status="processing"
+                )
+                db.add(payslip)
+            else:
+                payslip.amount = result.net_payable_amount
+            
+            # Update payslip with detailed leave-based salary data
+            payslip.basic_paid = result.basic_paid
+            payslip.basic_actual = result.basic_actual
+            payslip.hra_paid = result.hra_paid
+            payslip.hra_actual = result.hra_actual
+            payslip.medical_allowance_paid = result.medical_allowance_paid
+            payslip.medical_allowance_actual = result.medical_allowance_actual
+            payslip.conveyance_allowance_paid = result.conveyance_allowance_paid
+            payslip.conveyance_allowance_actual = result.conveyance_allowance_actual
+            payslip.total_earnings_paid = result.total_earnings_paid
+            payslip.total_earnings_actual = result.total_earnings_actual
+            payslip.professional_tax = result.professional_tax
+            payslip.total_deductions = result.total_deductions
+            payslip.actual_payable_days = result.actual_payable_days
+            payslip.total_working_days = result.total_working_days
+            payslip.loss_of_pay_days = result.loss_of_pay_days
+            payslip.days_payable = result.days_payable
+            payslip.leave_deduction_amount = result.leave_deduction_amount
+            
+            processed_count += 1
+            
+            results.append(LeaveBasedSalaryProcessingResponse(
+                success=True,
+                employee_id=employee.id,
+                employee_name=employee.user.full_name if employee.user else "Unknown",
+                month=bulk_request.month,
+                year=bulk_request.year,
+                basic_paid=result.basic_paid,
+                basic_actual=result.basic_actual,
+                hra_paid=result.hra_paid,
+                hra_actual=result.hra_actual,
+                medical_allowance_paid=result.medical_allowance_paid,
+                medical_allowance_actual=result.medical_allowance_actual,
+                conveyance_allowance_paid=result.conveyance_allowance_paid,
+                conveyance_allowance_actual=result.conveyance_allowance_actual,
+                total_earnings_paid=result.total_earnings_paid,
+                total_earnings_actual=result.total_earnings_actual,
+                professional_tax=result.professional_tax,
+                total_deductions=result.total_deductions,
+                actual_payable_days=result.actual_payable_days,
+                total_working_days=result.total_working_days,
+                loss_of_pay_days=result.loss_of_pay_days,
+                days_payable=result.days_payable,
+                leave_deduction_amount=result.leave_deduction_amount,
+                gross_payable_amount=result.gross_payable_amount,
+                net_payable_amount=result.net_payable_amount,
+                processed_at=datetime.now()
+            ))
+            
+        except Exception as e:
+
+            results.append(LeaveBasedSalaryProcessingResponse(
+                success=False,
+                employee_id=employee.id,
+                employee_name=employee.user.full_name if employee.user else "Unknown",
+                month=bulk_request.month,
+                year=bulk_request.year,
+                error_message=f"Error processing: {str(e)}",
+                processed_at=datetime.now()
+            ))
+    
+    # Commit all changes
+    if not bulk_request.dry_run:
+        db.commit()
+    
+    return results
+
+
+@router.get("/salary/monthly-processing-status/{month}/{year}", response_model=List[MonthlyProcessingStatus])
+def get_monthly_processing_status(
+    month: int,
+    year: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get monthly processing status for all employees (admin only).
+    
+    Args:
+        month: Month (1-12)
+        year: Year
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        List[MonthlyProcessingStatus]: Processing status for all employees
+    """
+    check_admin_access(current_user)
+    
+    # Get all active employees
+    employees = db.query(Employee).filter(
+        Employee.status.in_(["active", "full_time", "in-probation"])
+    ).all()
+    
+    status_list = []
+    
+    for employee in employees:
+        # Check if there's a monthly processing record
+        monthly_processing = db.query(MonthlySalaryProcessing).filter(
+            MonthlySalaryProcessing.month == month,
+            MonthlySalaryProcessing.year == year
+        ).first()
+        
+        # Check if there's a payslip for this employee
+        payslip = db.query(Payslip).filter(
+            Payslip.employee_id == employee.id,
+            Payslip.month == month,
+            Payslip.year == year
+        ).first()
+        
+        # Determine status
+        if payslip:
+            if payslip.status == "paid":
+                processing_status = "completed"
+            elif payslip.status == "processing":
+                processing_status = "in_progress"
+            else:
+                processing_status = "pending"
+        else:
+            processing_status = "pending"
+        
+        # Calculate leave-based salary details if payslip exists
+        leave_details = {}
+        if payslip and payslip.actual_payable_days:
+            leave_details = {
+                "total_working_days": payslip.total_working_days,
+                "actual_payable_days": payslip.actual_payable_days,
+                "loss_of_pay_days": payslip.loss_of_pay_days,
+                "leave_deduction_amount": payslip.leave_deduction_amount
+            }
+        
+        status_list.append(MonthlyProcessingStatus(
+            employee_id=employee.id,
+            employee_name=employee.user.full_name if employee.user else "Unknown",
+            employee_email=employee.user.email if employee.user else "",
+            department=employee.department,
+            month=month,
+            year=year,
+            processing_status=processing_status,
+            payslip_id=payslip.id if payslip else None,
+            net_amount=payslip.amount if payslip else employee.salary.net_pay if employee.salary else 0,
+            processed_at=payslip.created_at if payslip else None,
+            leave_details=leave_details
+        ))
+    
+    return status_list
+
+
+@router.post("/salary/monthly-processing/{month}/{year}/initialize", response_model=dict)
+def initialize_monthly_processing(
+    month: int,
+    year: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Initialize monthly salary processing for a specific month/year (admin only).
+    
+    Args:
+        month: Month (1-12)
+        year: Year
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        dict: Initialization result
+    """
+    check_admin_access(current_user)
+    
+    # Validate month
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12"
+        )
+    
+    # Check if processing record already exists
+    existing_processing = db.query(MonthlySalaryProcessing).filter(
+        MonthlySalaryProcessing.month == month,
+        MonthlySalaryProcessing.year == year
+    ).first()
+    
+    if existing_processing:
+        return {
+            "message": f"Monthly processing for {month}/{year} already initialized",
+            "processing_id": existing_processing.id,
+            "status": existing_processing.status
+        }
+    
+    # Count active employees
+    active_employees = db.query(Employee).filter(
+        Employee.status.in_(["active", "full_time", "in-probation"])
+    ).count()
+    
+    # Create new monthly processing record
+    monthly_processing = MonthlySalaryProcessing(
+        month=month,
+        year=year,
+        total_employees=active_employees,
+        status="initialized"
+    )
+    
+    db.add(monthly_processing)
+    db.commit()
+    db.refresh(monthly_processing)
+    
+    return {
+        "message": f"Monthly processing initialized for {month}/{year}",
+        "processing_id": monthly_processing.id,
+        "total_employees": active_employees,
+        "status": monthly_processing.status,
+        "initialized_at": monthly_processing.created_at
+    }
+
+
+
+@router.put("/salary/monthly-processing/{processing_id}/status", response_model=dict)
+def update_monthly_processing_status(
+    processing_id: int,
+    status: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update monthly processing status (admin only).
+    
+    Args:
+        processing_id: Monthly processing record ID
+        status: New status (initialized, in_progress, completed, failed)
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        dict: Update result
+    """
+    check_admin_access(current_user)
+    
+    # Get monthly processing record
+    monthly_processing = db.query(MonthlySalaryProcessing).filter(
+        MonthlySalaryProcessing.id == processing_id
+    ).first()
+    
+    if not monthly_processing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Monthly processing record not found"
+        )
+    
+    # Validate status
+    valid_statuses = ["initialized", "in_progress", "completed", "failed"]
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+        )
+    
+    # Update status
+    monthly_processing.status = status
+    monthly_processing.processed_date = datetime.now() if status in ["completed", "failed"] else None
+    
+    # Calculate statistics if completing
+    if status == "completed":
+        completed_payslips = db.query(Payslip).filter(
+            Payslip.month == monthly_processing.month,
+            Payslip.year == monthly_processing.year,
+            Payslip.status == "paid"
+        ).all()
+        
+        monthly_processing.successful_payments = len(completed_payslips)
+        monthly_processing.failed_payments = monthly_processing.total_employees - len(completed_payslips)
+        monthly_processing.total_processed_amount = sum(p.amount for p in completed_payslips)
+    
+    db.commit()
+    db.refresh(monthly_processing)
+    
+    return {
+        "message": f"Monthly processing status updated to {status}",
+        "processing_id": monthly_processing.id,
+        "month": monthly_processing.month,
+        "year": monthly_processing.year,
+        "status": monthly_processing.status,
+        "processed_at": monthly_processing.processed_date,
+        "statistics": {
+            "total_employees": monthly_processing.total_employees,
+            "successful_payments": monthly_processing.successful_payments,
+            "failed_payments": monthly_processing.failed_payments,
+            "total_processed_amount": monthly_processing.total_processed_amount
+        }
+    }
+
+
+# Salary Processing Endpoints (Admin-Only)
+
+@router.post("/salary-processing/process-employee", response_model=SingleEmployeeLeaveProcessingResponse)
+def process_employee_salary_with_leaves_admin(
+    employee_id: int,
+    request: SingleEmployeeLeaveProcessingRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Process salary for an employee with leave deductions (admin only).
+    
+    This endpoint allows admin to process salary for any employee with leave deductions
+    for a specific month.
+    
+    Args:
+        employee_id: Employee ID to process salary for
+        request: Leave processing request with unpaid leave details
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        SingleEmployeeLeaveProcessingResponse: Processing result with calculation details
+        
+    Raises:
+        HTTPException: 404 if employee not found, 403 if not admin
+    """
+    check_admin_access(current_user)
+    
+    try:
+        # Verify employee exists
+        employee = EmployeeService.get_employee_by_id(db, employee_id)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        # Use current month/year if not provided
+        current_date = datetime.now()
+        month = request.month or current_date.month
+        year = request.year or current_date.year
+        
+        # Initialize salary calculation service
+        salary_service = LeaveBasedSalaryCalculationService()
+        
+        # Process salary with leave deductions
+        calculation = salary_service.process_employee_salary_with_leaves(
+            db=db,
+            employee_id=employee_id,
+            year=year,
+            month=month,
+            unpaid_leave_days=request.unpaid_leave_days,
+            half_day_leaves=request.half_day_leaves,
+            dry_run=False
+        )
+        
+        # Get the generated payslip ID
+        payslip = db.query(Payslip).filter(
+            and_(
+                Payslip.employee_id == employee_id,
+                Payslip.year == year,
+                Payslip.month == month
+            )
+        ).first()
+        
+        return SingleEmployeeLeaveProcessingResponse(
+            success=True,
+            message="Salary processed successfully with leave deductions",
+            employee_id=employee_id,
+            employee_name=f"{employee.user.full_name if employee.user else 'Unknown'}",
+            payslip_id=payslip.id if payslip else None,
+            calculation_details=calculation.dict(),
+            final_amount=calculation.net_payable_amount,
+            month=month,
+            year=year,
+            processed_at=datetime.now()
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing salary: {str(e)}"
+        )
+
+
+@router.get("/salary-processing/payslip/{employee_id}/{year}/{month}", response_model=DetailedPayslipResponse)
+def get_detailed_payslip_admin(
+    employee_id: int,
+    year: int,
+    month: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed payslip for an employee (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        year: Year
+        month: Month
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        DetailedPayslipResponse: Detailed payslip information
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if payslip not found
+    """
+    check_admin_access(current_user)
+    
+    try:
+        # Verify employee exists
+        employee = EmployeeService.get_employee_by_id(db, employee_id)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        # Initialize salary calculation service
+        salary_service = LeaveBasedSalaryCalculationService()
+        
+        # Generate detailed payslip
+        payslip = salary_service.generate_detailed_payslip(db, employee_id, year, month)
+        
+        if not payslip:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Payslip not found"
+            )
+        
+        return payslip
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching payslip: {str(e)}"
+        )
+
+
+@router.get("/salary-processing/payslip/{employee_id}/{year}/{month}/formatted", response_model=PayslipFormatResponse)
+def get_formatted_payslip_admin(
+    employee_id: int,
+    year: int,
+    month: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get formatted payslip in the exact format requested (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        year: Year
+        month: Month
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        PayslipFormatResponse: Formatted payslip
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if payslip not found
+    """
+    check_admin_access(current_user)
+    
+    try:
+        # Verify employee exists
+        employee = EmployeeService.get_employee_by_id(db, employee_id)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        # Initialize salary calculation service
+        salary_service = LeaveBasedSalaryCalculationService()
+        
+        # Generate formatted payslip
+        payslip = salary_service.generate_formatted_payslip(db, employee_id, year, month)
+        
+        if not payslip:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Payslip not found or could not be generated"
+            )
+        
+        return payslip
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating formatted payslip: {str(e)}"
+        )
+
+
+
+@router.get("/salary-processing/leave-balance/{employee_id}/{year}/{month}", response_model=LeaveBalanceCheck)
+def get_employee_leave_balance_admin(
+    employee_id: int,
+    year: int,
+    month: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get employee leave balance for a specific month (admin only).
+    
+    Args:
+        employee_id: Employee ID
+        year: Year
+        month: Month
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        LeaveBalanceCheck: Leave balance information
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if no leave data found
+    """
+    check_admin_access(current_user)
+    
+    try:
+        # Verify employee exists
+        employee = EmployeeService.get_employee_by_id(db, employee_id)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        # Initialize salary calculation service
+        salary_service = LeaveBasedSalaryCalculationService()
+        
+        # Get leave balance
+        leave_balance = salary_service.check_leave_balance(db, employee_id, year, month)
+        
+        if not leave_balance:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Leave balance information not found"
+            )
+        
+        return leave_balance
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching leave balance: {str(e)}"
+        )
+
+
+# =============================================================================
+# THREE MAIN ADMIN APIs REQUESTED BY USER
+# =============================================================================
+
+@router.get("/salary/ctc-breakdown/{employee_id}", response_model=CTCBreakdownResponse)
+def get_employee_ctc_breakdown(
+    employee_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    API 1: Get complete CTC breakdown for an employee (based on current calculations).
+    
+    This endpoint provides a comprehensive breakdown of an employee's Cost to Company (CTC)
+    including all salary components, deductions, and calculation details.
+    
+    Args:
+        employee_id: Employee ID
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        CTCBreakdownResponse: Complete CTC breakdown with calculation details
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    try:
+        salary_service = SalaryCalculationService()
+        result = salary_service.get_ctc_breakdown_for_employee(db, employee_id)
+        return result
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting CTC breakdown: {str(e)}"
+        )
+
+
+
+@router.post("/salary/validate-monthly/{employee_id}", response_model=MonthlySalaryValidationResponse)
+def validate_monthly_salary_with_leaves(
+    employee_id: int,
+    year: int,
+    month: int,
+    unpaid_leave_days: Optional[float] = None,
+    half_day_leaves: Optional[float] = None,
+    custom_deduction: float = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    API 2: Validate and generate employee salary for a month based on unpaid leaves.
+    
+    This endpoint validates the salary calculation for a specific month considering
+    unpaid leaves, half-day leaves, and custom deductions.
+    
+    Automatically fetches unpaid leaves data from the leaves model for the specified month.
+    If unpaid_leave_days or half_day_leaves are not provided, they will be automatically
+    fetched from the employee's leave records.
+    
+    Args:
+        employee_id: Employee ID
+        year: Year
+        month: Month (1-12)
+        unpaid_leave_days: Number of unpaid leave days (optional, auto-fetched if None)
+        half_day_leaves: Number of half-day leaves (optional, auto-fetched if None)
+        custom_deduction: Custom additional deduction
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        MonthlySalaryValidationResponse: Validation results and calculations
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    try:
+        salary_service = SalaryCalculationService()
+        result = salary_service.validate_monthly_salary_with_leaves(
+            db=db,
+            employee_id=employee_id,
+            year=year,
+            month=month,
+            unpaid_leave_days=unpaid_leave_days,
+            half_day_leaves=half_day_leaves,
+            custom_deduction=custom_deduction
+        )
+        return result
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error validating monthly salary: {str(e)}"
+        )
+
+
+
+@router.post("/salary/generate-payslip/{employee_id}", response_model=PayslipGenerationResponse)
+def generate_employee_payslip_with_leaves(
+    employee_id: int,
+    year: int,
+    month: int,
+    unpaid_leave_days: Optional[float] = None,
+    half_day_leaves: Optional[float] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    API 3: Generate employee salary payslips based on unpaid leaves.
+    
+    This endpoint generates a detailed payslip with leave calculations showing:
+    - CTC, in-hand salary, total days, total working days
+    - Per-day salary (in-hand salary / days in month)
+    - Unpaid leaves taken, salary cut = unpaid_leaves × per_day_salary
+    - Total processed salary = in_hand_salary - salary_cut
+    
+    Automatically fetches unpaid leaves data from the leaves model for the specified month.
+    If unpaid_leave_days or half_day_leaves are not provided, they will be automatically
+    fetched from the employee's leave records and salary will be calculated based only
+    on unpaid leaves (not paid leaves).
+    
+    Args:
+        employee_id: Employee ID
+        year: Year
+        month: Month (1-12)
+        unpaid_leave_days: Override unpaid leave days (optional, auto-fetched if None)
+        half_day_leaves: Override half-day leaves (optional, auto-fetched if None)
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        PayslipGenerationResponse: Detailed payslip with all requested information
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    try:
+        salary_service = SalaryCalculationService()
+        result = salary_service.generate_detailed_payslip_with_leaves(
+            db=db,
+            employee_id=employee_id,
+            year=year,
+            month=month,
+            unpaid_leave_days=unpaid_leave_days,
+            half_day_leaves=half_day_leaves
+        )
+        return result
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating payslip: {str(e)}"
+        )

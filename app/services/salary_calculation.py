@@ -5,9 +5,17 @@ This module provides comprehensive salary calculation functionality including
 PF, income tax, professional tax calculations following Indian regulations.
 """
 
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 from datetime import date
+
+# Import the response models
+from ..schemas.admin_salary_apis import (
+    CTCBreakdownResponse,
+    MonthlySalaryValidationResponse,
+    PayslipGenerationResponse
+)
 
 
 @dataclass
@@ -588,6 +596,7 @@ class SalaryCalculationService:
             deductions_percentage=deductions_percentage
         )
     
+
     def format_salary_breakdown(self, components: SalaryComponents) -> Dict:
         """
         Format salary breakdown for display.
@@ -618,3 +627,428 @@ class SalaryCalculationService:
             },
             "calculation_details": components.calculation_details
         }
+
+
+    # New methods for the three specific admin APIs
+    
+    def _fetch_unpaid_leaves_for_month(self, db, employee_id: int, year: int, month: int) -> dict:
+        """
+        Fetch unpaid leaves data from leaves model for a specific month.
+        
+        Args:
+            db: Database session
+            employee_id: Employee ID
+            year: Year
+            month: Month (1-12)
+            
+        Returns:
+            dict: Contains unpaid_leave_days, half_day_leaves, and detailed breakdown
+        """
+        from ..models.leave import Leave
+        from datetime import date, datetime
+        import calendar
+        
+        # Calculate start and end dates for the month
+        start_date = date(year, month, 1)
+        end_date = date(year, month, calendar.monthrange(year, month)[1])
+        
+        # Query for unpaid leaves in the specified month
+        unpaid_leaves = db.query(Leave).filter(
+            Leave.employee_id == employee_id,
+            Leave.leave_type == 'unpaid',
+            Leave.start_date >= start_date,
+            Leave.end_date <= end_date
+        ).all()
+        
+        unpaid_leave_days = 0.0
+        half_day_leaves = 0.0
+        leave_breakdown = []
+        
+        for leave in unpaid_leaves:
+            if leave.half_day == "true":
+                # Half day leaves count as 0.5 days
+                if leave.half_day_type in ['first_half', 'second_half']:
+                    half_day_leaves += 0.5
+                    leave_breakdown.append({
+                        'leave_id': leave.id,
+                        'days': 0.5,
+                        'type': 'half_day',
+                        'half_day_type': leave.half_day_type,
+                        'start_date': leave.start_date.isoformat(),
+                        'end_date': leave.end_date.isoformat(),
+                        'reason': leave.reason
+                    })
+                else:
+                    # Generic half-day without specific type
+                    half_day_leaves += 0.5
+                    leave_breakdown.append({
+                        'leave_id': leave.id,
+                        'days': 0.5,
+                        'type': 'half_day',
+                        'half_day_type': 'unspecified',
+                        'start_date': leave.start_date.isoformat(),
+                        'end_date': leave.end_date.isoformat(),
+                        'reason': leave.reason
+                    })
+            else:
+                # Full day leaves
+                unpaid_leave_days += leave.days
+                leave_breakdown.append({
+                    'leave_id': leave.id,
+                    'days': leave.days,
+                    'type': 'full_day',
+                    'start_date': leave.start_date.isoformat(),
+                    'end_date': leave.end_date.isoformat(),
+                    'reason': leave.reason
+                })
+        
+        return {
+            'unpaid_leave_days': unpaid_leave_days,
+            'half_day_leaves': half_day_leaves,
+            'total_unpaid_leave_days': unpaid_leave_days + half_day_leaves,
+            'leave_breakdown': leave_breakdown,
+            'query_period': {
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat()
+            },
+            'total_leave_records_found': len(unpaid_leaves)
+        }
+
+    def get_ctc_breakdown_for_employee(self, db, employee_id: int):
+        """
+        Get complete CTC breakdown for an employee.
+        
+        Args:
+            db: Database session
+            employee_id: Employee ID
+            
+        Returns:
+            CTCBreakdownResponse: Complete CTC breakdown
+        """
+        from ..models.employee import Employee
+        from ..models.salary import Salary
+        from ..models.user import User
+        from datetime import datetime
+        
+        # Get employee with salary information
+        employee = db.query(Employee).filter(Employee.id == employee_id).first()
+        if not employee:
+            raise ValueError("Employee not found")
+        
+        salary = db.query(Salary).filter(Salary.employee_id == employee_id).first()
+        if not salary:
+            raise ValueError("Salary information not found for employee")
+        
+        # Calculate professional tax dynamically (Salary model doesn't have this field)
+        # Default to 'default' state if no specific state information is available
+        state = getattr(employee, 'state', 'default') or 'default'
+        professional_tax = self.calculator._calculate_professional_tax(state)
+        
+        # Calculate additional metrics
+        cost_per_day = salary.annual_ctc / 365
+        employer_pf = min(salary.basic, self.calculator.PF_CAP) * self.calculator.PF_EMPLOYER_RATE
+        
+        # Get calculation details
+        calculation_details = {
+            "basic_percentage": round((salary.basic * 12) / salary.annual_ctc, 4) if salary.annual_ctc > 0 else 0,
+            "hra_percentage": round(salary.hra / salary.basic, 4) if salary.basic > 0 else 0,
+            "professional_tax_calculation": f"Monthly professional tax for {state}: {professional_tax:.2f}",
+            "cost_per_day_calculation": f"{salary.annual_ctc} / 365 = {cost_per_day:.2f}",
+            "employer_pf_calculation": f"min({salary.basic}, {self.calculator.PF_CAP}) * {self.calculator.PF_EMPLOYER_RATE} = {employer_pf:.2f}",
+            "last_calculated": datetime.now().isoformat()
+        }
+        
+        return CTCBreakdownResponse(
+            employee_id=employee.id,
+            employee_name=employee.user.full_name if employee.user else "Unknown",
+            employee_email=employee.user.email if employee.user else "",
+            department=employee.department,
+            designation=employee.designation,
+            annual_ctc=salary.annual_ctc,
+            monthly_gross=salary.monthly_gross,
+            basic=salary.basic,
+            hra=salary.hra,
+            special_allowance=salary.special_allowance,
+            pf_deduction=salary.pf_deduction,
+            tax_deduction=salary.tax_deduction,
+            professional_tax=professional_tax,
+            total_deductions=salary.total_deductions,
+            net_pay=salary.net_pay,
+            employer_pf=employer_pf,
+            cost_per_day=cost_per_day,
+            calculation_details=calculation_details,
+            last_updated=datetime.now()
+        )
+    
+
+    def validate_monthly_salary_with_leaves(
+        self,
+        db,
+        employee_id: int,
+        year: int,
+        month: int,
+        unpaid_leave_days: float = None,
+        half_day_leaves: float = None,
+        custom_deduction: float = 0
+    ):
+        """
+        Validate and generate salary for a month with unpaid leaves.
+        
+        Automatically fetches unpaid leaves data from leaves model for the specified month.
+        
+        Args:
+            db: Database session
+            employee_id: Employee ID
+            year: Year
+            month: Month (1-12)
+            unpaid_leave_days: Number of unpaid leave days (optional, auto-fetched if None)
+            half_day_leaves: Number of half-day leaves (optional, auto-fetched if None)
+            custom_deduction: Custom additional deduction
+            
+        Returns:
+            MonthlySalaryValidationResponse: Validation results and calculations
+        """
+        from ..models.employee import Employee
+        from ..models.salary import Salary
+        from ..models.leave import Leave
+        from datetime import datetime, date
+        import calendar
+        
+        # Get employee with salary information
+        employee = db.query(Employee).filter(Employee.id == employee_id).first()
+        if not employee:
+            raise ValueError("Employee not found")
+        
+        salary = db.query(Salary).filter(Salary.employee_id == employee_id).first()
+        if not salary:
+            raise ValueError("Salary information not found for employee")
+        
+        # Calculate days in month
+        days_in_month = calendar.monthrange(year, month)[1]
+        
+        # Automatically fetch unpaid leaves data from leaves model
+        unpaid_leave_data = self._fetch_unpaid_leaves_for_month(db, employee_id, year, month)
+        
+        # Use provided values or auto-fetched values
+        if unpaid_leave_days is None:
+            unpaid_leave_days = unpaid_leave_data['unpaid_leave_days']
+        if half_day_leaves is None:
+            half_day_leaves = unpaid_leave_data['half_day_leaves']
+        
+        # Get working days (excluding weekends) - simplified calculation
+        # In a real implementation, you'd exclude holidays and weekends
+        working_days = int(days_in_month * 0.71)  # Rough approximation
+        
+        # Calculate payable days
+        unpaid_leave_days = max(0, unpaid_leave_days)
+        half_day_leaves = max(0, half_day_leaves)
+        payable_days = days_in_month - unpaid_leave_days - (half_day_leaves * 0.5)
+        payable_days = max(0, payable_days)
+        
+        # Calculate daily salary (per day salary)
+        daily_salary = salary.net_pay / days_in_month
+        
+        # Calculate deductions based on unpaid leaves only
+        leave_deduction = unpaid_leave_days * daily_salary
+        total_deductions = salary.total_deductions + leave_deduction + custom_deduction
+        final_net_salary = salary.net_pay - leave_deduction - custom_deduction
+        
+        # Validation
+        validation_issues = []
+        if final_net_salary < 0:
+            validation_issues.append("Final salary would be negative after deductions")
+            is_valid = False
+        else:
+            is_valid = True
+        
+        if payable_days < days_in_month * 0.5:  # Less than 50% attendance
+            validation_issues.append("Payable days are less than 50% of total days")
+            is_valid = False
+        
+        calculation_details = {
+            "days_in_month": days_in_month,
+            "working_days": working_days,
+            "daily_salary_calculation": f"{salary.net_pay} / {days_in_month} = {daily_salary:.2f}",
+            "leave_deduction_calculation": f"{unpaid_leave_days} * {daily_salary:.2f} = {leave_deduction:.2f}",
+            "final_salary_calculation": f"{salary.net_pay} - {leave_deduction:.2f} - {custom_deduction:.2f} = {final_net_salary:.2f}",
+            "payable_days_ratio": round(payable_days / days_in_month, 4),
+            "auto_fetched_leave_data": unpaid_leave_data
+        }
+        
+        return MonthlySalaryValidationResponse(
+            success=is_valid,
+            employee_id=employee.id,
+            employee_name=employee.user.full_name if employee.user else "Unknown",
+            month=month,
+            year=year,
+            is_valid=is_valid,
+            validation_issues=validation_issues,
+            days_in_month=days_in_month,
+            working_days=working_days,
+            unpaid_leave_days=unpaid_leave_days,
+            half_day_leaves=half_day_leaves,
+            payable_days=payable_days,
+            daily_salary=daily_salary,
+            leave_deduction=leave_deduction,
+            custom_deduction=custom_deduction,
+            total_deductions=total_deductions,
+            final_net_salary=final_net_salary,
+            payslip_id=None,  # Would be set if payslip is generated
+            payslip_generated=False,
+            calculation_details=calculation_details,
+            processed_at=datetime.now()
+        )
+    
+
+    def generate_detailed_payslip_with_leaves(
+        self,
+        db,
+        employee_id: int,
+        year: int,
+        month: int,
+        unpaid_leave_days: Optional[float] = None,
+        half_day_leaves: Optional[float] = None
+    ):
+        """
+        Generate detailed payslip with leave calculations.
+        
+        Automatically fetches unpaid leaves data from leaves model for the specified month.
+        
+        This returns exactly the payslip format requested:
+        - CTC, in-hand salary, total days, working days
+        - Per-day salary (in-hand salary / days in month)
+        - Unpaid leaves taken, salary cut = unpaid_leaves × per_day_salary
+        - Total processed salary = in_hand_salary - salary_cut
+        
+        Args:
+            db: Database session
+            employee_id: Employee ID
+            year: Year
+            month: Month (1-12)
+            unpaid_leave_days: Override unpaid leave days (optional, auto-fetched if None)
+            half_day_leaves: Override half-day leaves (optional, auto-fetched if None)
+            
+        Returns:
+            PayslipGenerationResponse: Detailed payslip with all requested information
+        """
+        from ..models.employee import Employee
+        from ..models.salary import Salary
+        from ..models.leave import Leave
+        from datetime import datetime, date
+        import calendar
+        
+        # Get employee with salary information
+        employee = db.query(Employee).filter(Employee.id == employee_id).first()
+        if not employee:
+            raise ValueError("Employee not found")
+        
+        salary = db.query(Salary).filter(Salary.employee_id == employee_id).first()
+        if not salary:
+            raise ValueError("Salary information not found for employee")
+        
+        # Calculate days in month
+        days_in_month = calendar.monthrange(year, month)[1]
+        
+        # Automatically fetch unpaid leaves data from leaves model
+        unpaid_leave_data = self._fetch_unpaid_leaves_for_month(db, employee_id, year, month)
+        
+        # Use provided values or auto-fetched values
+        if unpaid_leave_days is None:
+            unpaid_leave_days = unpaid_leave_data['unpaid_leave_days']
+        if half_day_leaves is None:
+            half_day_leaves = unpaid_leave_data['half_day_leaves']
+        
+        # Calculate total working days (simplified - would exclude weekends/holidays)
+        total_working_days = int(days_in_month * 0.71)  # Rough approximation
+        
+        # Calculate per-day salary (in-hand salary / days in month)
+        in_hand_salary = salary.net_pay
+        per_day_salary = in_hand_salary / days_in_month
+        
+        # Calculate salary cut for unpaid leaves (unpaid leaves only)
+        salary_cut_for_unpaid_leaves = unpaid_leave_days * per_day_salary
+        
+        # Calculate final processed salary
+        final_processed_salary = in_hand_salary - salary_cut_for_unpaid_leaves
+        
+        # Payslip components (actual vs payable)
+        basic_actual = salary.basic
+        hra_actual = salary.hra
+        special_allowance_actual = salary.special_allowance
+        total_earnings_actual = salary.monthly_gross
+        
+        # For this simplified version, assume payable = actual
+        # In a real implementation, you'd prorate based on payable days
+        basic_payable = basic_actual
+        hra_payable = hra_actual
+        special_allowance_payable = special_allowance_actual
+        total_earnings_payable = total_earnings_actual
+        
+
+        # Deductions
+        pf_deduction = salary.pf_deduction
+        tax_deduction = salary.tax_deduction
+        # Calculate professional tax dynamically (Salary model doesn't have this field)
+        state = getattr(employee, 'state', 'default') or 'default'
+        professional_tax = self.calculator._calculate_professional_tax(state)
+        leave_deduction = salary_cut_for_unpaid_leaves
+        other_deductions = 0
+        total_deductions = salary.total_deductions + leave_deduction
+        
+        # Additional payslip details
+        ytd_earnings = None  # Would be calculated from historical payslips
+        ytd_deductions = None  # Would be calculated from historical payslips
+        leave_balance_remaining = None  # Would be calculated from leave balance
+        
+        calculation_details = {
+            "per_day_salary_calculation": f"{in_hand_salary} / {days_in_month} = {per_day_salary:.2f}",
+            "salary_cut_calculation": f"{unpaid_leave_days} * {per_day_salary:.2f} = {salary_cut_for_unpaid_leaves:.2f}",
+            "final_salary_calculation": f"{in_hand_salary} - {salary_cut_for_unpaid_leaves:.2f} = {final_processed_salary:.2f}",
+            "total_working_days_estimation": f"{days_in_month} * 0.71 ≈ {total_working_days} days",
+            "generated_for_month": f"{month}/{year}",
+            "leave_processing_note": "Half day leaves counted as 0.5 days each",
+            "auto_fetched_leave_data": unpaid_leave_data
+        }
+        
+        return PayslipGenerationResponse(
+            success=True,
+            employee_id=employee.id,
+            employee_name=employee.user.full_name if employee.user else "Unknown",
+            employee_email=employee.user.email if employee.user else "",
+            department=employee.department,
+            designation=employee.designation,
+            payslip_id=None,  # Would be set if saved to DB
+            month=month,
+            year=year,
+            pay_date=date.today(),
+            annual_ctc=salary.annual_ctc,
+            monthly_ctc=salary.monthly_gross,
+            basic_actual=basic_actual,
+            basic_payable=basic_payable,
+            hra_actual=hra_actual,
+            hra_payable=hra_payable,
+            special_allowance_actual=special_allowance_actual,
+            special_allowance_payable=special_allowance_payable,
+            total_earnings_actual=total_earnings_actual,
+            total_earnings_payable=total_earnings_payable,
+            pf_deduction=pf_deduction,
+            tax_deduction=tax_deduction,
+            professional_tax=professional_tax,
+            leave_deduction=leave_deduction,
+            other_deductions=other_deductions,
+            total_deductions=total_deductions,
+            gross_salary=total_earnings_payable,
+            in_hand_salary=in_hand_salary,
+            total_days_in_month=days_in_month,
+            total_working_days=total_working_days,
+            unpaid_leaves_taken=unpaid_leave_days,
+            half_day_leaves=half_day_leaves,
+            per_day_salary=per_day_salary,
+            salary_cut_for_unpaid_leaves=salary_cut_for_unpaid_leaves,
+            final_processed_salary=final_processed_salary,
+            ytd_earnings=ytd_earnings,
+            ytd_deductions=ytd_deductions,
+            leave_balance_remaining=leave_balance_remaining,
+            generated_at=datetime.now(),
+            calculation_details=calculation_details
+        )
