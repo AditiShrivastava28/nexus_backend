@@ -170,3 +170,45 @@ class PayslipStatusUpdate(BaseModel):
     new_status: str
     amount: float
     updated_at: datetime
+
+
+class ProcessedPayslipItem(BaseModel):
+    """
+    Schema for individual processed payslip item.
+    
+    Attributes:
+        employee_id: Employee ID
+        email: Employee email address
+        amount_processed: Amount that was processed
+        status: Payment status
+        processed_at: When the payment was processed
+    """
+    employee_id: int
+    email: str
+    amount_processed: float
+    status: str
+    processed_at: datetime
+
+
+class ProcessedPayslipsResponse(BaseModel):
+    """
+    Schema for response containing all processed payslips.
+    
+    Attributes:
+        success: Whether the request was successful
+        message: Success/error message
+        processed_payslips: List of processed payslips
+        total_count: Total number of processed payslips
+        page: Current page number
+        per_page: Number of items per page
+        total_pages: Total number of pages
+        generated_at: When the response was generated
+    """
+    success: bool
+    message: str
+    processed_payslips: list[ProcessedPayslipItem]
+    total_count: int
+    page: int
+    per_page: int
+    total_pages: int
+    generated_at: datetime

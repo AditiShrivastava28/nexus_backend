@@ -86,7 +86,18 @@ from ..schemas.payment_processing import (
     SinglePaymentProcessResponse,
     BulkPaymentProcessRequest,
     BulkPaymentProcessResponse,
-    UnpaidSalariesCheckResponse
+    UnpaidSalariesCheckResponse,
+    ProcessedPayslipsResponse
+)
+
+from ..schemas.monthly_salary_admin import (
+    MonthlySalaryDataResponse,
+    MonthlySalaryFilters,
+    EmployeeMonthlySalaryData,
+    MonthlySalarySummaryResponse,
+    EmployeeSalarySummary,
+    EmployeeSalaryDetail,
+    MonthlySalaryEmployeeDetailsResponse
 )
 
 
@@ -100,6 +111,16 @@ from ..schemas.leave_salary_processing import (
     DetailedPayslipResponse,
     PayslipFormatResponse,
     LeaveBalanceCheck
+)
+
+from ..schemas.salary_processing import (
+    EmployeeSalaryProcessingRequest,
+    EmployeeSalaryProcessingResponse,
+    PreviousPayslipInfo,
+    BulkSalaryProcessingRequest,
+    BulkSalaryProcessingResponse,
+    BulkProcessingEmployeeResult,
+    SalaryProcessingStatusCheck
 )
 
 from ..services.employee import EmployeeService
@@ -2175,284 +2196,7 @@ def calculate_salary_auto(
         )
 
 
-@router.get("/employees/{employee_id}/finance-overview", response_model=FinancesResponse)
-def get_employee_finance_overview_admin(
-    employee_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Get complete finance overview for employee (admin only).
-    
-    Args:
-        employee_id: Employee ID
-        current_user: Current authenticated user
-        db: Database session
-        
-    Returns:
-        FinancesResponse: Complete finance overview
-        
-    Raises:
-        HTTPException: 404 if employee or salary not found
-    """
-    check_admin_access(current_user)
-    
-    # Verify employee exists
-    employee = EmployeeService.get_employee_by_id(db, employee_id)
-    if not employee:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Employee not found"
-        )
-    
-    # Get salary
-    salary = db.query(Salary).filter(Salary.employee_id == employee_id).first()
-    if not salary:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Salary information not found for this employee"
-        )
-    
-    # Calculate days to next pay
-    today = date.today()
-    if salary.next_pay_date:
-        days_to_pay = (salary.next_pay_date - today).days
-        days_to_pay = max(0, days_to_pay)
-    else:
-        days_to_pay = 0
-    
-    salary_response = SalaryDetailsResponse(
-        annualCTC=salary.annual_ctc,
-        monthlyGross=salary.monthly_gross,
-        basic=salary.basic,
-        hra=salary.hra,
-        specialAllowance=salary.special_allowance,
-        pfDeduction=salary.pf_deduction,
-        taxDeduction=salary.tax_deduction,
-        totalDeductions=salary.total_deductions,
-        netPay=salary.net_pay,
-        currency=salary.currency
-    )
-    
-    pay_cycle = PayCycleResponse(
-        lastPaid=salary.last_paid,
-        nextPayDate=salary.next_pay_date,
-        daysToPay=days_to_pay,
-        nextIncrementDate=salary.next_increment_date,
-        incrementCycle=salary.increment_cycle
-    )
-    
-    # Get payslips
-    payslips = db.query(Payslip).filter(
-        Payslip.employee_id == employee_id
-    ).order_by(Payslip.year.desc(), Payslip.month.desc()).all()
-    
-    payslip_responses = [PayslipResponse(
-        id=p.id,
-        month=p.month,
-        year=p.year,
-        amount=p.amount,
-        status=p.status
-    ) for p in payslips]
-    
-    return FinancesResponse(
-        salary=salary_response,
-        payCycle=pay_cycle,
-
-        payslips=payslip_responses
-    )
-
-
 # Payment Processing Endpoints
-
-
-
-@router.post("/salary/pay/{employee_id}", response_model=SinglePaymentProcessResponse)
-def process_single_employee_payment(
-    employee_id: int,
-    payment_request: Optional[SinglePaymentProcessRequest] = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Process payment for a single employee and update payslip status to paid.
-    
-    Args:
-        employee_id: Employee ID from path parameter
-        payment_request: Payment processing request data (month and year only)
-        current_user: Current authenticated user
-        db: Database session
-        
-    Returns:
-        SinglePaymentProcessResponse: Payment processing result
-        
-    Raises:
-        HTTPException: 404 if employee/salary/payslip not found
-    """
-
-
-    check_admin_access(current_user)
-    
-    # Use current month/year if not provided in request body
-    if payment_request:
-        month = payment_request.month if payment_request.month else date.today().month
-        year = payment_request.year if payment_request.year else date.today().year
-    else:
-        month = date.today().month
-        year = date.today().year
-    
-    # Verify employee exists
-    employee = EmployeeService.get_employee_by_id(db, employee_id)
-    if not employee:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Employee not found"
-        )
-    
-    # Get salary information
-    salary = db.query(Salary).filter(Salary.employee_id == employee_id).first()
-    if not salary:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Salary information not found for this employee"
-        )
-    
-    # Find or create payslip for the specified month/year
-    payslip = db.query(Payslip).filter(
-        Payslip.employee_id == employee_id,
-        Payslip.month == month,
-        Payslip.year == year
-    ).first()
-    
-
-    if not payslip:
-        # Create new payslip if it doesn't exist
-        payslip = Payslip(
-            employee_id=employee_id,
-            month=month,
-            year=year,
-            amount=salary.net_pay,
-            status="paid"
-        )
-        db.add(payslip)
-    else:
-        # Update existing payslip status
-        old_status = payslip.status
-        payslip.status = "paid"
-    
-    # Update salary last_paid date
-    salary.last_paid = date.today()
-    
-    db.commit()
-    db.refresh(payslip)
-    
-
-    return SinglePaymentProcessResponse(
-        success=True,
-        message=f"Payment processed successfully for {employee.user.full_name if employee.user else 'Unknown'}",
-        employee_id=employee_id,
-        employee_name=employee.user.full_name if employee.user else "Unknown",
-        payslip_id=payslip.id,
-        amount=payslip.amount,
-        month=month,
-        year=year,
-        processed_at=payslip.created_at
-    )
-
-
-@router.post("/salary/pay-all", response_model=BulkPaymentProcessResponse)
-def process_all_employees_salary(
-    payment_request: BulkPaymentProcessRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Process salary payments for all employees automatically.
-    
-    Args:
-        payment_request: Bulk payment processing request
-        current_user: Current authenticated user
-        db: Database session
-        
-    Returns:
-        BulkPaymentProcessResponse: Bulk payment processing results
-    """
-    check_admin_access(current_user)
-    
-    # Get all active employees with salary information
-    employees_with_salary = db.query(Employee).join(Salary).filter(
-        Employee.status.in_(["active", "full_time", "in-probation"])
-    ).all()
-    
-    total_employees = len(employees_with_salary)
-    processed_employees = []
-    failed_employees = []
-    processed_count = 0
-    
-    for employee in employees_with_salary:
-        try:
-            # Find or create payslip for the specified month/year
-            payslip = db.query(Payslip).filter(
-                Payslip.employee_id == employee.id,
-                Payslip.month == payment_request.month,
-                Payslip.year == payment_request.year
-            ).first()
-            
-            if not payslip:
-                # Create new payslip
-                payslip = Payslip(
-                    employee_id=employee.id,
-                    month=payment_request.month,
-                    year=payment_request.year,
-                    amount=employee.salary.net_pay,
-                    status="paid"
-                )
-                db.add(payslip)
-            else:
-                # Update existing payslip status
-                payslip.status = "paid"
-            
-            # Update salary last_paid date
-            employee.salary.last_paid = date.today()
-            
-            processed_count += 1
-            
-            processed_employees.append({
-                "employee_id": employee.id,
-                "employee_name": employee.user.full_name if employee.user else "Unknown",
-                "employee_email": employee.user.email if employee.user else "",
-                "payslip_id": payslip.id,
-                "amount": payslip.amount,
-                "status": "paid"
-            })
-            
-        except Exception as e:
-            failed_employees.append({
-                "employee_id": employee.id,
-                "employee_name": employee.user.full_name if employee.user else "Unknown",
-                "error": str(e)
-            })
-    
-    # Only commit if not dry run
-    if not payment_request.dry_run:
-        db.commit()
-    
-    failed_count = total_employees - processed_count
-    
-    message = f"Bulk payment processing completed: {processed_count} processed, {failed_count} failed"
-    if payment_request.dry_run:
-        message = f"Dry run completed: {processed_count} would be processed, {failed_count} would fail"
-    
-    return BulkPaymentProcessResponse(
-        success=processed_count > 0,
-        message=message,
-        total_employees=total_employees,
-        processed_count=processed_count,
-        failed_count=failed_count,
-        processed_employees=processed_employees,
-        failed_employees=failed_employees,
-        processed_at=datetime.now()
-    )
 
 
 @router.get("/salary/check-unpaid", response_model=UnpaidSalariesCheckResponse)
@@ -2573,6 +2317,123 @@ def check_unpaid_salaries(
 
 
 
+
+
+
+
+
+
+
+# =============================================================================
+# PROCESSED PAYSLIPS ENDPOINT
+# =============================================================================
+
+@router.get("/payslips/processed", response_model=ProcessedPayslipsResponse)
+def get_all_processed_payslips(
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    department: Optional[str] = None,
+    status: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all processed payslips (admin only).
+    
+    This endpoint returns a list of all processed payslips with employee information.
+    Supports filtering by month, year, department, and status.
+    
+    Args:
+        month: Optional month filter (1-12)
+        year: Optional year filter
+        department: Optional department filter
+        status: Optional status filter (default: "paid" for processed payslips)
+        skip: Number of records to skip (for pagination)
+        limit: Maximum number of records (for pagination)
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        ProcessedPayslipsResponse: List of processed payslips with pagination info
+        
+    Raises:
+        HTTPException: 403 if not admin
+    """
+    check_admin_access(current_user)
+    
+    # Default status to "paid" for processed payslips if not specified
+    if status is None:
+        status = "paid"
+    
+    # Validate month parameter if provided
+    if month is not None and (month < 1 or month > 12):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12"
+        )
+    
+    try:
+        # Build query for processed payslips with employee and user information
+        query = db.query(Payslip).join(Employee).join(User)
+        
+        # Apply status filter (default to "paid")
+        query = query.filter(Payslip.status == status)
+        
+        # Apply month filter if provided
+        if month is not None:
+            query = query.filter(Payslip.month == month)
+        
+        # Apply year filter if provided
+        if year is not None:
+            query = query.filter(Payslip.year == year)
+        
+        # Apply department filter if provided
+        if department is not None:
+            query = query.filter(Employee.department == department)
+        
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Apply pagination and ordering
+        # Order by most recent processed date first
+        processed_payslips = query.order_by(
+            Payslip.processed_at.desc(),
+            Payslip.id.desc()
+        ).offset(skip).limit(limit).all()
+        
+        # Convert to response format
+        processed_payslip_items = []
+        for payslip in processed_payslips:
+            processed_payslip_items.append({
+                "employee_id": payslip.employee_id,
+                "email": payslip.employee.user.email if payslip.employee.user else "",
+                "amount_processed": payslip.amount,
+                "status": payslip.status,
+                "processed_at": payslip.processed_at
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_count + limit - 1) // limit  # Ceiling division
+        current_page = (skip // limit) + 1
+        
+        return ProcessedPayslipsResponse(
+            success=True,
+            message=f"Retrieved {len(processed_payslip_items)} processed payslips",
+            processed_payslips=processed_payslip_items,
+            total_count=total_count,
+            page=current_page,
+            per_page=limit,
+            total_pages=total_pages,
+            generated_at=datetime.now()
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving processed payslips: {str(e)}"
+        )
 
 
 # =============================================================================
@@ -2749,4 +2610,660 @@ def generate_employee_payslip_with_leaves(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating payslip: {str(e)}"
+        )
+
+
+# =============================================================================
+# SALARY PROCESSING API ENDPOINT
+# =============================================================================
+
+@router.post("/salary/process/{employee_id}", response_model=EmployeeSalaryProcessingResponse)
+def process_employee_salary(
+    employee_id: int,
+    month: int,
+    year: int,
+    amount: Optional[float] = None,
+    custom_deductions: float = 0.0,
+    notes: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Process employee salary with payslip generation and monthly tracking.
+    
+    This endpoint processes salary for a specific employee, month, and year while preventing
+    duplicate payments. It creates/updates both payslip and monthly_salary_processing records.
+    
+    Features:
+    - Prevents duplicate payments for the same employee/month/year
+    - Creates or updates payslip record with status = "paid"
+    - Updates MonthlySalaryProcessing record for the month/year
+    - Handles custom deductions and optional notes
+    - Returns detailed processing information
+    
+    Args:
+        employee_id: Employee ID (path parameter)
+        month: Month for salary processing (1-12, query parameter)
+        year: Year for salary processing (query parameter)
+        amount: Optional amount to process (defaults to employee's net_pay)
+        custom_deductions: Additional custom deductions (default: 0.0)
+        notes: Optional notes for this payment
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        EmployeeSalaryProcessingResponse: Processing results with payslip and monthly tracking info
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if employee not found, 409 if duplicate payment
+    """
+    check_admin_access(current_user)
+    
+    # Validate month parameter
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12"
+        )
+    
+    # Validate custom deductions
+    if custom_deductions < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Custom deductions cannot be negative"
+        )
+    
+    try:
+        # Verify employee exists and get salary information
+        employee = EmployeeService.get_employee_by_id(db, employee_id)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        if not employee.salary:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Salary information not found for this employee"
+            )
+        
+        # Check for existing paid payslip for duplicate prevention
+        existing_payslip = db.query(Payslip).filter(
+            Payslip.employee_id == employee_id,
+            Payslip.month == month,
+            Payslip.year == year,
+            Payslip.status == "paid"
+        ).first()
+        
+        if existing_payslip:
+            # Duplicate payment detected - return error with previous payslip info
+            previous_payslip_info = PreviousPayslipInfo(
+                payslip_id=existing_payslip.id,
+                amount=existing_payslip.amount,
+                processed_at=existing_payslip.processed_at,
+                status=existing_payslip.status
+            )
+            
+            return EmployeeSalaryProcessingResponse(
+                success=False,
+                message=f"Salary already processed for {employee.user.full_name if employee.user else employee_id} in {month}/{year}",
+                employee_id=employee_id,
+                employee_name=employee.user.full_name if employee.user else "Unknown",
+                employee_email=employee.user.email if employee.user else "",
+                month=month,
+                year=year,
+                amount_processed=0.0,
+                status="duplicate_prevented",
+                processed_at=datetime.now(),
+                duplicate_prevented=True,
+                previous_payslip_info=previous_payslip_info
+            )
+        
+        # Calculate processing amount
+        base_amount = amount if amount is not None else employee.salary.net_pay
+        final_amount = max(0, base_amount - custom_deductions)
+        
+        # Check for existing payslip (pending or other status) to update
+        existing_payslip_any_status = db.query(Payslip).filter(
+            Payslip.employee_id == employee_id,
+            Payslip.month == month,
+            Payslip.year == year
+        ).first()
+        
+        payslip_id = None
+        if existing_payslip_any_status:
+            # Update existing payslip
+            existing_payslip_any_status.amount = final_amount
+            existing_payslip_any_status.status = "paid"
+            existing_payslip_any_status.processed_at = datetime.now()
+            if notes:
+                existing_payslip_any_status.notes = notes
+            payslip_id = existing_payslip_any_status.id
+            
+            payslip_details = {
+                "action": "updated",
+                "previous_status": existing_payslip_any_status.status,
+                "previous_amount": existing_payslip_any_status.amount,
+                "notes_added": notes is not None
+            }
+        else:
+            # Create new payslip
+            new_payslip = Payslip(
+                employee_id=employee_id,
+                month=month,
+                year=year,
+                amount=final_amount,
+                status="paid",
+                processed_at=datetime.now(),
+                basic_paid=employee.salary.basic,
+                basic_actual=employee.salary.basic,
+                hra_paid=employee.salary.hra,
+                hra_actual=employee.salary.hra,
+                medical_allowance_paid=0.0,
+                medical_allowance_actual=0.0,
+                conveyance_allowance_paid=0.0,
+                conveyance_allowance_actual=0.0,
+                total_earnings_paid=employee.salary.monthly_gross,
+                total_earnings_actual=employee.salary.monthly_gross,
+                professional_tax=employee.salary.tax_deduction,
+                total_deductions=employee.salary.total_deductions,
+                actual_payable_days=22.0,  # Default working days
+                total_working_days=22.0,
+                loss_of_pay_days=0.0,
+                days_payable=22.0,
+                leave_deduction_amount=custom_deductions
+            )
+            db.add(new_payslip)
+            db.flush()  # Get the ID without committing
+            payslip_id = new_payslip.id
+            
+            payslip_details = {
+                "action": "created",
+                "basic": employee.salary.basic,
+                "hra": employee.salary.hra,
+                "special_allowance": employee.salary.special_allowance,
+                "pf_deduction": employee.salary.pf_deduction,
+                "tax_deduction": employee.salary.tax_deduction,
+                "total_deductions": employee.salary.total_deductions,
+                "net_pay": employee.salary.net_pay,
+                "custom_deductions": custom_deductions,
+                "notes": notes
+            }
+        
+        # Update or create MonthlySalaryProcessing record
+        monthly_processing = db.query(MonthlySalaryProcessing).filter(
+            MonthlySalaryProcessing.month == month,
+            MonthlySalaryProcessing.year == year
+        ).first()
+        
+        monthly_processing_id = None
+        if monthly_processing:
+            # Update existing record
+            monthly_processing.successful_payments += 1
+            monthly_processing.total_processed_amount += final_amount
+            monthly_processing.processed_at = datetime.now()
+            monthly_processing_id = monthly_processing.id
+            
+            monthly_processing_details = {
+                "action": "updated",
+                "previous_successful_payments": monthly_processing.successful_payments - 1,
+                "previous_total_amount": monthly_processing.total_processed_amount - final_amount,
+                "increment": 1,
+                "amount_added": final_amount
+            }
+        else:
+            # Create new record
+            new_monthly_processing = MonthlySalaryProcessing(
+                month=month,
+                year=year,
+                processed_at=datetime.now(),
+                total_employees=1,
+                successful_payments=1,
+                failed_payments=0,
+                total_processed_amount=final_amount,
+                status="completed"
+            )
+            db.add(new_monthly_processing)
+            db.flush()  # Get the ID without committing
+            monthly_processing_id = new_monthly_processing.id
+            
+            monthly_processing_details = {
+                "action": "created",
+                "total_employees": 1,
+                "successful_payments": 1,
+                "failed_payments": 0,
+                "total_processed_amount": final_amount,
+                "status": "completed"
+            }
+        
+        # Commit all changes
+        db.commit()
+        
+        return EmployeeSalaryProcessingResponse(
+            success=True,
+            message=f"Salary processed successfully for {employee.user.full_name if employee.user else employee_id}",
+            employee_id=employee_id,
+            employee_name=employee.user.full_name if employee.user else "Unknown",
+            employee_email=employee.user.email if employee.user else "",
+            month=month,
+            year=year,
+            amount_processed=final_amount,
+            status="paid",
+            processed_at=datetime.now(),
+            payslip_id=payslip_id,
+            monthly_processing_id=monthly_processing_id,
+            duplicate_prevented=False,
+            payslip_details=payslip_details,
+            monthly_processing_details=monthly_processing_details
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing salary: {str(e)}"
+        )
+
+
+@router.get("/salary/check-processing-status/{employee_id}", response_model=SalaryProcessingStatusCheck)
+def check_salary_processing_status(
+    employee_id: int,
+    month: int,
+    year: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Check salary processing status for an employee.
+    
+    This endpoint checks if salary has been processed for a specific employee and month/year,
+    providing information about existing payslips and monthly processing records.
+    
+    Args:
+        employee_id: Employee ID
+        month: Month to check (1-12)
+        year: Year to check
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        SalaryProcessingStatusCheck: Processing status information
+        
+    Raises:
+        HTTPException: 403 if not admin, 404 if employee not found
+    """
+    check_admin_access(current_user)
+    
+    # Validate month parameter
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12"
+        )
+    
+    # Verify employee exists
+    employee = EmployeeService.get_employee_by_id(db, employee_id)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    # Check for existing payslip
+    existing_payslip = db.query(Payslip).filter(
+        Payslip.employee_id == employee_id,
+        Payslip.month == month,
+        Payslip.year == year
+    ).first()
+    
+    payslip_status = None
+    if existing_payslip:
+        payslip_status = {
+            "has_paid_payslip": existing_payslip.status == "paid",
+            "payslip_id": existing_payslip.id,
+            "payslip_amount": existing_payslip.amount,
+            "payslip_status": existing_payslip.status,
+            "processed_at": existing_payslip.processed_at
+        }
+    else:
+        payslip_status = {
+            "has_paid_payslip": False,
+            "payslip_id": None,
+            "payslip_amount": None,
+            "payslip_status": None,
+            "processed_at": None
+        }
+    
+    # Check for monthly processing record
+    monthly_processing = db.query(MonthlySalaryProcessing).filter(
+        MonthlySalaryProcessing.month == month,
+        MonthlySalaryProcessing.year == year
+    ).first()
+    
+    monthly_processing_status = {
+        "monthly_processing_record_exists": monthly_processing is not None,
+        "monthly_processing_id": monthly_processing.id if monthly_processing else None
+    }
+    
+    return SalaryProcessingStatusCheck(
+        employee_id=employee_id,
+        month=month,
+        year=year,
+        **payslip_status,
+        **monthly_processing_status,
+        employee_name=employee.user.full_name if employee.user else "Unknown",
+        employee_email=employee.user.email if employee.user else ""
+    )
+
+
+@router.post("/salary/bulk-process", response_model=BulkSalaryProcessingResponse)
+def bulk_process_salaries(
+    month: int,
+    year: int,
+    employee_ids: Optional[List[int]] = None,
+    custom_deductions: float = 0.0,
+    notes: Optional[str] = None,
+    skip_duplicates: bool = True,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Bulk process salaries for multiple employees.
+    
+    This endpoint processes salary for multiple employees for the same month and year,
+    with optional filtering by employee IDs and duplicate prevention.
+    
+    Args:
+        month: Month for salary processing (1-12)
+        year: Year for salary processing
+        employee_ids: Optional list of specific employee IDs to process (None = all active employees)
+        custom_deductions: Additional custom deductions for all employees
+        notes: Optional notes for these payments
+        skip_duplicates: Whether to skip employees who already have paid payslips
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        BulkSalaryProcessingResponse: Bulk processing results
+        
+    Raises:
+        HTTPException: 403 if not admin, 400 for invalid parameters
+    """
+    check_admin_access(current_user)
+    
+    # Validate parameters
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12"
+        )
+    
+    if custom_deductions < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Custom deductions cannot be negative"
+        )
+    
+    try:
+        # Get employees to process
+        if employee_ids:
+            # Process specific employees
+            employees = db.query(Employee).filter(
+                Employee.id.in_(employee_ids),
+                Employee.status.in_(["active", "full_time", "in-probation"])
+            ).all()
+        else:
+            # Process all active employees
+            employees = db.query(Employee).filter(
+                Employee.status.in_(["active", "full_time", "in-probation"])
+            ).all()
+        
+        processed_employees = []
+        failed_employees = []
+        skipped_employees = []
+        total_amount_processed = 0.0
+        
+        for employee in employees:
+            try:
+                # Check if employee has salary information
+                if not employee.salary:
+                    failed_employees.append(BulkProcessingEmployeeResult(
+                        employee_id=employee.id,
+                        employee_name=employee.user.full_name if employee.user else "Unknown",
+                        success=False,
+                        message="Salary information not found",
+                        duplicate_prevented=False
+                    ))
+                    continue
+                
+                # Check for existing paid payslip if skipping duplicates
+                if skip_duplicates:
+                    existing_payslip = db.query(Payslip).filter(
+                        Payslip.employee_id == employee.id,
+                        Payslip.month == month,
+                        Payslip.year == year,
+                        Payslip.status == "paid"
+                    ).first()
+                    
+                    if existing_payslip:
+                        skipped_employees.append(BulkProcessingEmployeeResult(
+                            employee_id=employee.id,
+                            employee_name=employee.user.full_name if employee.user else "Unknown",
+                            success=False,
+                            message=f"Salary already processed in {month}/{year}",
+                            duplicate_prevented=True
+                        ))
+                        continue
+                
+                # Calculate processing amount
+                base_amount = employee.salary.net_pay
+                final_amount = max(0, base_amount - custom_deductions)
+                
+                # Create or update payslip
+                existing_payslip = db.query(Payslip).filter(
+                    Payslip.employee_id == employee.id,
+                    Payslip.month == month,
+                    Payslip.year == year
+                ).first()
+                
+                if existing_payslip:
+                    existing_payslip.amount = final_amount
+                    existing_payslip.status = "paid"
+                    existing_payslip.processed_at = datetime.now()
+                    if notes:
+                        existing_payslip.notes = notes
+                    payslip_id = existing_payslip.id
+                else:
+                    new_payslip = Payslip(
+                        employee_id=employee.id,
+                        month=month,
+                        year=year,
+                        amount=final_amount,
+                        status="paid",
+                        processed_at=datetime.now(),
+                        basic_paid=employee.salary.basic,
+                        basic_actual=employee.salary.basic,
+                        hra_paid=employee.salary.hra,
+                        hra_actual=employee.salary.hra,
+                        medical_allowance_paid=0.0,
+                        medical_allowance_actual=0.0,
+                        conveyance_allowance_paid=0.0,
+                        conveyance_allowance_actual=0.0,
+                        total_earnings_paid=employee.salary.monthly_gross,
+                        total_earnings_actual=employee.salary.monthly_gross,
+                        professional_tax=employee.salary.tax_deduction,
+                        total_deductions=employee.salary.total_deductions,
+                        actual_payable_days=22.0,
+                        total_working_days=22.0,
+                        loss_of_pay_days=0.0,
+                        days_payable=22.0,
+                        leave_deduction_amount=custom_deductions
+                    )
+                    db.add(new_payslip)
+                    db.flush()
+                    payslip_id = new_payslip.id
+                
+                # Update monthly processing record
+                monthly_processing = db.query(MonthlySalaryProcessing).filter(
+                    MonthlySalaryProcessing.month == month,
+                    MonthlySalaryProcessing.year == year
+                ).first()
+                
+                if monthly_processing:
+                    monthly_processing.successful_payments += 1
+                    monthly_processing.total_processed_amount += final_amount
+                    monthly_processing.processed_at = datetime.now()
+                else:
+                    new_monthly_processing = MonthlySalaryProcessing(
+                        month=month,
+                        year=year,
+                        processed_at=datetime.now(),
+                        total_employees=1,
+                        successful_payments=1,
+                        failed_payments=0,
+                        total_processed_amount=final_amount,
+                        status="completed"
+                    )
+                    db.add(new_monthly_processing)
+                    db.flush()
+                
+                # Add to processed list
+                processed_employees.append(BulkProcessingEmployeeResult(
+                    employee_id=employee.id,
+                    employee_name=employee.user.full_name if employee.user else "Unknown",
+                    success=True,
+                    message=f"Salary processed successfully",
+                    payslip_id=payslip_id,
+                    amount_processed=final_amount,
+                    duplicate_prevented=False
+                ))
+                
+                total_amount_processed += final_amount
+                
+            except Exception as e:
+                failed_employees.append(BulkProcessingEmployeeResult(
+                    employee_id=employee.id,
+                    employee_name=employee.user.full_name if employee.user else "Unknown",
+                    success=False,
+                    message=f"Error processing: {str(e)}",
+                    duplicate_prevented=False
+                ))
+        
+        # Commit all changes
+        db.commit()
+        
+        return BulkSalaryProcessingResponse(
+            success=True,
+            message=f"Bulk salary processing completed for {month}/{year}",
+            total_employees=len(employees),
+            processed_count=len(processed_employees),
+            failed_count=len(failed_employees),
+            skipped_count=len(skipped_employees),
+            processed_employees=processed_employees,
+            failed_employees=failed_employees,
+            skipped_employees=skipped_employees,
+            month=month,
+            year=year,
+            total_amount_processed=total_amount_processed,
+            processed_at=datetime.now()
+        )
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error in bulk processing: {str(e)}"
+        )
+
+@router.get("/monthly-salary-employee-details", response_model=MonthlySalaryEmployeeDetailsResponse)
+def get_monthly_salary_employee_details(
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get individual employee salary details for a specific month (admin only).
+    
+    This endpoint provides detailed information for each employee including:
+    - Employee ID
+    - Employee Email
+    - Amount Paid (null if unpaid)
+    - Status (paid or unpaid)
+    
+    Args:
+        month: Month to check (1-12), defaults to current month
+        year: Year to check, defaults to current year
+        current_user: Current authenticated user (admin)
+        db: Database session
+        
+    Returns:
+        MonthlySalaryEmployeeDetailsResponse: Individual employee salary details
+        
+    Raises:
+        HTTPException: 403 if not admin, 400 for invalid parameters
+    """
+    check_admin_access(current_user)
+    
+    # Use current month/year if not provided
+    if month is None:
+        month = date.today().month
+    if year is None:
+        year = date.today().year
+    
+    # Validate month parameter
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12"
+        )
+    
+    try:
+        # Get all employees with salary information
+        employees = db.query(Employee).join(User).join(Salary).all()
+        
+        employees_data = []
+        
+        for employee in employees:
+            # Check if there's a payslip for this employee in the specified month/year
+            payslip = db.query(Payslip).filter(
+                Payslip.employee_id == employee.id,
+                Payslip.month == month,
+                Payslip.year == year
+            ).first()
+            
+            if payslip and payslip.status == "paid":
+                # Employee has been paid for this month
+                employee_detail = EmployeeSalaryDetail(
+                    employee_id=employee.id,
+                    email=employee.user.email if employee.user else "",
+                    amount_paid=payslip.amount,
+                    status="paid"
+                )
+            else:
+                # Employee has not been paid for this month
+                employee_detail = EmployeeSalaryDetail(
+                    employee_id=employee.id,
+                    email=employee.user.email if employee.user else "",
+                    amount_paid=None,
+                    status="unpaid"
+                )
+            
+            employees_data.append(employee_detail)
+        
+        return MonthlySalaryEmployeeDetailsResponse(
+            success=True,
+            month=month,
+            year=year,
+            employees=employees_data,
+            generated_at=datetime.now()
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving employee salary details: {str(e)}"
         )
