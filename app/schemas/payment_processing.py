@@ -39,7 +39,7 @@ class SinglePaymentProcessResponse(BaseModel):
         amount: Amount paid
         month: Month of payment
         year: Year of payment
-        processed_at: Payment processing timestamp
+        processed_date: Payment processing timestamp
     """
     success: bool
     message: str
@@ -49,7 +49,7 @@ class SinglePaymentProcessResponse(BaseModel):
     amount: float
     month: int
     year: int
-    processed_at: datetime
+    processed_date: datetime
 
 
 class BulkPaymentProcessRequest(BaseModel):
@@ -98,7 +98,7 @@ class BulkPaymentProcessResponse(BaseModel):
         failed_count: Number of employees who failed processing
         processed_employees: List of successfully processed employees
         failed_employees: List of failed employees with reasons
-        processed_at: Processing timestamp
+        processed_date: Processing timestamp
     """
     success: bool
     message: str
@@ -107,7 +107,7 @@ class BulkPaymentProcessResponse(BaseModel):
     failed_count: int
     processed_employees: List[PaymentProcessSummary]
     failed_employees: List[dict]
-    processed_at: datetime
+    processed_date: datetime
 
 
 class UnpaidEmployee(BaseModel):
@@ -181,13 +181,13 @@ class ProcessedPayslipItem(BaseModel):
         email: Employee email address
         amount_processed: Amount that was processed
         status: Payment status
-        processed_at: When the payment was processed
+        processed_date: When the payment was processed
     """
     employee_id: int
     email: str
     amount_processed: float
     status: str
-    processed_at: datetime
+    processed_date: datetime
 
 
 class ProcessedPayslipsResponse(BaseModel):

@@ -56,7 +56,7 @@ def add_missing_payslip_columns():
         ("loss_of_pay_days", "FLOAT DEFAULT 0"),
         ("days_payable", "FLOAT DEFAULT 0"),
         ("leave_deduction_amount", "FLOAT DEFAULT 0"),
-        ("processed_at", "TIMESTAMP WITH TIME ZONE")
+        ("processed_date", "TIMESTAMP WITH TIME ZONE")
     ]
     
     try:

@@ -30,7 +30,7 @@ class PreviousPayslipInfo(BaseModel):
     """
     payslip_id: int
     amount: float
-    processed_at: datetime
+    processed_date: datetime
     status: str
     
     class Config:
@@ -57,7 +57,7 @@ class EmployeeSalaryProcessingResponse(BaseModel):
     year: int
     amount_processed: float
     status: str  # "paid", "error", "duplicate_prevented"
-    processed_at: datetime
+    processed_date: datetime
     
     # Record IDs
     payslip_id: Optional[int] = None
@@ -129,7 +129,7 @@ class BulkSalaryProcessingResponse(BaseModel):
     month: int
     year: int
     total_amount_processed: float
-    processed_at: datetime
+    processed_date: datetime
     
     class Config:
         from_attributes = True
@@ -150,7 +150,7 @@ class SalaryProcessingStatusCheck(BaseModel):
     payslip_id: Optional[int] = None
     payslip_amount: Optional[float] = None
     payslip_status: Optional[str] = None
-    processed_at: Optional[datetime] = None
+    processed_date: Optional[datetime] = None
     
     # Monthly processing status
     monthly_processing_record_exists: bool = False

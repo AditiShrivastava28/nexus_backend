@@ -82,7 +82,7 @@ class DetailedPayslipResponse(BaseModel):
         taxes_deductions: Taxes and deductions breakdown
         working_days: Working days calculations
         final_amount: Final payable amount
-        processed_at: Processing timestamp
+        processed_date: Processing timestamp
     """
     id: int
     employee_id: int
@@ -94,7 +94,7 @@ class DetailedPayslipResponse(BaseModel):
     working_days: Dict[str, float]
     final_amount: float
     status: str
-    processed_at: Optional[datetime] = None
+    processed_date: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -128,7 +128,7 @@ class LeaveBasedSalaryProcessingResponse(BaseModel):
         total_amount: Total amount processed
         processed_employees: List of processed employees with details
         failed_employees: List of failed employees with reasons
-        processed_at: Processing timestamp
+        processed_date: Processing timestamp
     """
     success: bool
     message: str
@@ -139,7 +139,7 @@ class LeaveBasedSalaryProcessingResponse(BaseModel):
     total_amount: float
     processed_employees: List[Dict]
     failed_employees: List[Dict]
-    processed_at: datetime
+    processed_date: datetime
 
 
 class SingleEmployeeLeaveProcessingRequest(BaseModel):
@@ -172,7 +172,7 @@ class SingleEmployeeLeaveProcessingResponse(BaseModel):
         final_amount: Final payable amount
         month: Month of processing
         year: Year of processing
-        processed_at: Processing timestamp
+        processed_date: Processing timestamp
     """
     success: bool
     message: str
@@ -183,7 +183,7 @@ class SingleEmployeeLeaveProcessingResponse(BaseModel):
     final_amount: float
     month: int
     year: int
-    processed_at: datetime
+    processed_date: datetime
 
 
 class LeaveBalanceCheck(BaseModel):

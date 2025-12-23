@@ -53,7 +53,7 @@ def migrate_database():
             ("loss_of_pay_days", "REAL DEFAULT 0"),
             ("days_payable", "REAL DEFAULT 0"),
             ("leave_deduction_amount", "REAL DEFAULT 0"),
-            ("processed_at", "DATETIME")
+            ("processed_date", "DATETIME")
         ]
         
         # Add missing columns
@@ -142,7 +142,7 @@ def verify_migration():
             "total_earnings_paid", "total_earnings_actual",
             "professional_tax", "total_deductions",
             "actual_payable_days", "total_working_days", "loss_of_pay_days",
-            "days_payable", "leave_deduction_amount", "processed_at"
+            "days_payable", "leave_deduction_amount", "processed_date"
         ]
         
         missing_columns = [col for col in required_columns if col not in payslip_columns]

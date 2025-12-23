@@ -116,7 +116,7 @@ class MonthlySalaryValidationResponse(BaseModel):
     
     # Calculation breakdown
     calculation_details: Dict[str, Any]
-    processed_at: datetime
+    processed_date: datetime
     
     class Config:
         from_attributes = True
@@ -244,4 +244,4 @@ class BulkSalaryValidationResponse(BaseModel):
     processed_count: int
     failed_count: int
     results: list[MonthlySalaryValidationResponse]
-    processed_at: datetime
+    processed_date: datetime

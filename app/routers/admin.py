@@ -2399,7 +2399,7 @@ def get_all_processed_payslips(
         # Apply pagination and ordering
         # Order by most recent processed date first
         processed_payslips = query.order_by(
-            Payslip.processed_at.desc(),
+            Payslip.processed_date.desc(),
             Payslip.id.desc()
         ).offset(skip).limit(limit).all()
         
@@ -2411,7 +2411,7 @@ def get_all_processed_payslips(
                 "email": payslip.employee.user.email if payslip.employee.user else "",
                 "amount_processed": payslip.amount,
                 "status": payslip.status,
-                "processed_at": payslip.processed_at
+                "processed_datete": payslip.processed_date
             })
         
         # Calculate pagination info
@@ -2701,7 +2701,7 @@ def process_employee_salary(
             previous_payslip_info = PreviousPayslipInfo(
                 payslip_id=existing_payslip.id,
                 amount=existing_payslip.amount,
-                processed_at=existing_payslip.processed_at,
+                processed_date=existing_payslip.processed_date,
                 status=existing_payslip.status
             )
             
@@ -2715,7 +2715,7 @@ def process_employee_salary(
                 year=year,
                 amount_processed=0.0,
                 status="duplicate_prevented",
-                processed_at=datetime.now(),
+                processed_date=datetime.now(),
                 duplicate_prevented=True,
                 previous_payslip_info=previous_payslip_info
             )
@@ -2736,7 +2736,7 @@ def process_employee_salary(
             # Update existing payslip
             existing_payslip_any_status.amount = final_amount
             existing_payslip_any_status.status = "paid"
-            existing_payslip_any_status.processed_at = datetime.now()
+            existing_payslip_any_status.processed_date = datetime.now()
             if notes:
                 existing_payslip_any_status.notes = notes
             payslip_id = existing_payslip_any_status.id
@@ -2755,7 +2755,7 @@ def process_employee_salary(
                 year=year,
                 amount=final_amount,
                 status="paid",
-                processed_at=datetime.now(),
+                processed_date=datetime.now(),
                 basic_paid=employee.salary.basic,
                 basic_actual=employee.salary.basic,
                 hra_paid=employee.salary.hra,
@@ -2802,7 +2802,7 @@ def process_employee_salary(
             # Update existing record
             monthly_processing.successful_payments += 1
             monthly_processing.total_processed_amount += final_amount
-            monthly_processing.processed_at = datetime.now()
+            monthly_processing.processed_date = datetime.now()
             monthly_processing_id = monthly_processing.id
             
             monthly_processing_details = {
@@ -2817,7 +2817,7 @@ def process_employee_salary(
             new_monthly_processing = MonthlySalaryProcessing(
                 month=month,
                 year=year,
-                processed_at=datetime.now(),
+                processed_date=datetime.now(),
                 total_employees=1,
                 successful_payments=1,
                 failed_payments=0,
@@ -2850,7 +2850,7 @@ def process_employee_salary(
             year=year,
             amount_processed=final_amount,
             status="paid",
-            processed_at=datetime.now(),
+            processed_date=datetime.now(),
             payslip_id=payslip_id,
             monthly_processing_id=monthly_processing_id,
             duplicate_prevented=False,
@@ -2926,7 +2926,7 @@ def check_salary_processing_status(
             "payslip_id": existing_payslip.id,
             "payslip_amount": existing_payslip.amount,
             "payslip_status": existing_payslip.status,
-            "processed_at": existing_payslip.processed_at
+            "processed_date": existing_payslip.processed_date
         }
     else:
         payslip_status = {
@@ -2934,7 +2934,7 @@ def check_salary_processing_status(
             "payslip_id": None,
             "payslip_amount": None,
             "payslip_status": None,
-            "processed_at": None
+            "processed_date": None
         }
     
     # Check for monthly processing record
@@ -3072,7 +3072,7 @@ def bulk_process_salaries(
                 if existing_payslip:
                     existing_payslip.amount = final_amount
                     existing_payslip.status = "paid"
-                    existing_payslip.processed_at = datetime.now()
+                    existing_payslip.processed_date = datetime.now()
                     if notes:
                         existing_payslip.notes = notes
                     payslip_id = existing_payslip.id
@@ -3083,7 +3083,7 @@ def bulk_process_salaries(
                         year=year,
                         amount=final_amount,
                         status="paid",
-                        processed_at=datetime.now(),
+                        processed_date=datetime.now(),
                         basic_paid=employee.salary.basic,
                         basic_actual=employee.salary.basic,
                         hra_paid=employee.salary.hra,
@@ -3115,12 +3115,12 @@ def bulk_process_salaries(
                 if monthly_processing:
                     monthly_processing.successful_payments += 1
                     monthly_processing.total_processed_amount += final_amount
-                    monthly_processing.processed_at = datetime.now()
+                    monthly_processing.processed_date = datetime.now()
                 else:
                     new_monthly_processing = MonthlySalaryProcessing(
                         month=month,
                         year=year,
-                        processed_at=datetime.now(),
+                        processed_date=datetime.now(),
                         total_employees=1,
                         successful_payments=1,
                         failed_payments=0,
@@ -3168,7 +3168,7 @@ def bulk_process_salaries(
             month=month,
             year=year,
             total_amount_processed=total_amount_processed,
-            processed_at=datetime.now()
+            processed_date=datetime.now()
         )
         
     except Exception as e:

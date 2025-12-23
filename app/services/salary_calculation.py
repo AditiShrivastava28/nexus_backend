@@ -896,7 +896,7 @@ class SalaryCalculationService:
             payslip_id=None,  # Would be set if payslip is generated
             payslip_generated=False,
             calculation_details=calculation_details,
-            processed_at=datetime.now()
+            processed_date=datetime.now()
         )
     
 

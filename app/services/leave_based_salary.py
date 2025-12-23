@@ -359,7 +359,7 @@ class LeaveBasedSalaryCalculationService:
         # Final amount
         payslip.amount = calculation.net_payable_amount
         payslip.status = "processed"
-        payslip.processed_at = datetime.now()
+        payslip.processed_date = datetime.now()
         
         db.commit()
     
@@ -448,7 +448,7 @@ class LeaveBasedSalaryCalculationService:
             working_days=working_days,
             final_amount=payslip.amount,
             status=payslip.status,
-            processed_at=payslip.processed_at
+            processed_date=payslip.processed_date
         )
     
     def generate_formatted_payslip(

@@ -122,7 +122,7 @@ class Payslip(Base):
     leave_deduction_amount = Column(Float, default=0)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    processed_at = Column(DateTime(timezone=True))
+    processed_date = Column(DateTime(timezone=True))
     
     # Relationships
     employee = relationship("Employee", back_populates="payslips")
