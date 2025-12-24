@@ -13,6 +13,7 @@ from datetime import date
 from ..database import get_db
 from ..models.employee import Employee
 from ..models.salary import Salary, Payslip
+from ..models.leave import Leave
 
 
 from ..schemas.salary import (
@@ -20,7 +21,10 @@ from ..schemas.salary import (
     PayCycleResponse,
     PayslipResponse,
     FinancesResponse,
-    CTCBreakupResponse
+    CTCBreakupResponse,
+    EmployeePayslipListResponse,
+    EmployeePayslipDetailResponse,
+    MonthlySalaryLogsResponse
 )
 from ..utils.deps import get_current_employee
 from ..services.salary_calculation import SalaryCalculationService
@@ -29,147 +33,6 @@ from ..services.salary_calculation import SalaryCalculationService
 router = APIRouter(prefix="/finances", tags=["Finances"])
 
 
-@router.get("/salary", response_model=FinancesResponse)
-def get_salary_details(
-    current_employee: Employee = Depends(get_current_employee),
-    db: Session = Depends(get_db)
-):
-    """
-    Get salary details and payslips for the current user.
-    
-    Args:
-        current_employee: User's employee profile
-        db: Database session
-        
-    Returns:
-        FinancesResponse: Salary details, pay cycle, and payslips
-        
-    Raises:
-        HTTPException: 404 if salary info not found
-    """
-    salary = db.query(Salary).filter(
-        Salary.employee_id == current_employee.id
-    ).first()
-    
-    if not salary:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Salary information not found"
-        )
-    
-    # Calculate days to next pay
-    today = date.today()
-    if salary.next_pay_date:
-        days_to_pay = (salary.next_pay_date - today).days
-        days_to_pay = max(0, days_to_pay)
-    else:
-        days_to_pay = 0
-    
-    salary_response = SalaryDetailsResponse(
-        annualCTC=salary.annual_ctc,
-        monthlyGross=salary.monthly_gross,
-        basic=salary.basic,
-        hra=salary.hra,
-        specialAllowance=salary.special_allowance,
-        pfDeduction=salary.pf_deduction,
-        taxDeduction=salary.tax_deduction,
-        totalDeductions=salary.total_deductions,
-        netPay=salary.net_pay,
-        currency=salary.currency
-    )
-    
-    pay_cycle = PayCycleResponse(
-        lastPaid=salary.last_paid,
-        nextPayDate=salary.next_pay_date,
-        daysToPay=days_to_pay,
-        nextIncrementDate=salary.next_increment_date,
-        incrementCycle=salary.increment_cycle
-    )
-    
-    # Get payslips
-    payslips = db.query(Payslip).filter(
-        Payslip.employee_id == current_employee.id
-    ).order_by(Payslip.year.desc(), Payslip.month.desc()).all()
-    
-    payslip_responses = [PayslipResponse(
-        id=p.id,
-        month=p.month,
-        year=p.year,
-        amount=p.amount,
-        status=p.status
-    ) for p in payslips]
-    
-    return FinancesResponse(
-        salary=salary_response,
-        payCycle=pay_cycle,
-        payslips=payslip_responses
-    )
-
-
-@router.get("/payslips", response_model=List[PayslipResponse])
-def get_payslips(
-    current_employee: Employee = Depends(get_current_employee),
-    db: Session = Depends(get_db)
-):
-    """
-    Get payslip history for the current user.
-    
-    Args:
-        current_employee: User's employee profile
-        db: Database session
-        
-    Returns:
-        List[PayslipResponse]: List of payslips
-    """
-    payslips = db.query(Payslip).filter(
-        Payslip.employee_id == current_employee.id
-    ).order_by(Payslip.year.desc(), Payslip.month.desc()).all()
-    
-    return [PayslipResponse(
-        id=p.id,
-        month=p.month,
-        year=p.year,
-        amount=p.amount,
-        status=p.status
-    ) for p in payslips]
-
-
-@router.get("/payslips/{payslip_id}/download")
-def download_payslip(
-    payslip_id: int,
-    current_employee: Employee = Depends(get_current_employee),
-    db: Session = Depends(get_db)
-):
-    """
-    Download a payslip PDF.
-    
-    Args:
-        payslip_id: Payslip ID to download
-        current_employee: User's employee profile
-        db: Database session
-        
-    Returns:
-        dict: Payslip download URL or message
-        
-    Raises:
-        HTTPException: 404 if payslip not found
-    """
-    payslip = db.query(Payslip).filter(
-        Payslip.id == payslip_id,
-        Payslip.employee_id == current_employee.id
-    ).first()
-    
-    if not payslip:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Payslip not found"
-        )
-    
-    if payslip.file_url:
-        return {"download_url": payslip.file_url}
-    
-
-    return {"message": "Payslip PDF not yet available"}
 
 
 @router.get("/ctc-breakup", response_model=CTCBreakupResponse)
@@ -318,3 +181,316 @@ def get_ctc_breakup(
     )
     
     return ctc_breakup
+
+
+@router.get("/payslips", response_model=list[EmployeePayslipListResponse])
+def get_employee_payslips(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get list of employee's monthly payslips.
+    
+    Args:
+        current_employee: Current authenticated employee
+        db: Database session
+        
+    Returns:
+        List of EmployeePayslipListResponse: Employee's payslip history
+    """
+    # Get all payslips for the current employee
+    payslips = db.query(Payslip).filter(
+        Payslip.employee_id == current_employee.id
+    ).order_by(Payslip.year.desc(), Payslip.month.desc()).all()
+    
+    return payslips
+
+
+@router.get("/payslips/{year}/{month}", response_model=EmployeePayslipDetailResponse)
+def get_employee_payslip_detail(
+    year: int,
+    month: int,
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed payslip for specific month.
+    
+    Args:
+        year: Year of the payslip
+        month: Month of the payslip (1-12)
+        current_employee: Current authenticated employee
+        db: Database session
+        
+    Returns:
+        EmployeePayslipDetailResponse: Detailed payslip information
+        
+    Raises:
+        HTTPException: 404 if payslip not found
+    """
+    # Get the specific payslip for the employee
+    payslip = db.query(Payslip).filter(
+        Payslip.employee_id == current_employee.id,
+        Payslip.year == year,
+        Payslip.month == month
+    ).first()
+    
+    if not payslip:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Payslip not found for {year}-{month:02d}"
+        )
+    
+    # Get employee salary information for CTC details
+    salary = db.query(Salary).filter(
+        Salary.employee_id == current_employee.id
+    ).first()
+    
+    if not salary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Salary information not found"
+        )
+    
+    # Calculate additional fields
+    from calendar import monthrange
+    days_in_month = monthrange(year, month)[1]
+    
+    # Get employee name and email
+    employee_name = current_employee.user.full_name if current_employee.user else ""
+    employee_email = current_employee.user.email if current_employee.user else ""
+    
+    # Calculate per-day salary
+    per_day_salary = salary.net_pay / days_in_month if days_in_month > 0 else 0
+    
+    # Calculate leave deductions
+    leave_deduction = payslip.leave_deduction_amount if payslip.leave_deduction_amount else 0
+    salary_cut_for_unpaid_leaves = payslip.loss_of_pay_days * per_day_salary if payslip.loss_of_pay_days else 0
+    
+    # Calculate final processed salary
+    final_processed_salary = payslip.amount
+    
+    # Build detailed response
+    payslip_detail = EmployeePayslipDetailResponse(
+        employee_id=current_employee.id,
+        employee_name=employee_name,
+        employee_email=employee_email,
+        department=current_employee.department or "",
+        designation=current_employee.designation or "",
+        
+        # Payslip identification
+        payslip_id=payslip.id,
+        month=payslip.month,
+        year=payslip.year,
+        pay_date=None,  # Could be added to Payslip model if needed
+        
+        # CTC Information
+        annual_ctc=salary.annual_ctc,
+        monthly_ctc=salary.annual_ctc / 12,
+        
+        # Salary Components (actual vs payable)
+        basic_actual=payslip.basic_actual if payslip.basic_actual else salary.basic,
+        basic_payable=payslip.basic_paid if payslip.basic_paid else salary.basic,
+        hra_actual=payslip.hra_actual if payslip.hra_actual else salary.hra,
+        hra_payable=payslip.hra_paid if payslip.hra_paid else salary.hra,
+        medical_allowance_actual=payslip.medical_allowance_actual or 0,
+        medical_allowance_payable=payslip.medical_allowance_paid or 0,
+        conveyance_allowance_actual=payslip.conveyance_allowance_actual or 0,
+        conveyance_allowance_payable=payslip.conveyance_allowance_paid or 0,
+        total_earnings_actual=payslip.total_earnings_actual if payslip.total_earnings_actual else salary.monthly_gross,
+        total_earnings_payable=payslip.total_earnings_paid if payslip.total_earnings_paid else salary.monthly_gross,
+        
+        # Deductions
+        pf_deduction=salary.pf_deduction,
+        tax_deduction=salary.tax_deduction,
+        professional_tax=payslip.professional_tax or 0,
+        leave_deduction=leave_deduction,
+        total_deductions=payslip.total_deductions if payslip.total_deductions else salary.total_deductions,
+        
+        # Net Salary
+        gross_salary=salary.monthly_gross,
+        in_hand_salary=payslip.amount,
+        
+        # Leave and Days Information
+        total_days_in_month=days_in_month,
+        total_working_days=payslip.total_working_days or days_in_month,
+        unpaid_leaves_taken=payslip.loss_of_pay_days or 0,
+        half_day_leaves=0,  # Could be calculated from leave records
+        per_day_salary=per_day_salary,
+        days_payable=payslip.days_payable if payslip.days_payable else days_in_month,
+        
+        # Leave-based calculations
+        salary_cut_for_unpaid_leaves=salary_cut_for_unpaid_leaves,
+        final_processed_salary=final_processed_salary,
+        
+        # Additional information
+        ytd_earnings=None,  # Could be calculated from year-to-date payslips
+        ytd_deductions=None,  # Could be calculated from year-to-date payslips
+        
+        # Metadata
+        generated_at=payslip.created_at,
+        calculation_details={
+            "payable_days": payslip.days_payable,
+            "total_working_days": payslip.total_working_days,
+            "loss_of_pay_days": payslip.loss_of_pay_days,
+            "leave_deduction_amount": payslip.leave_deduction_amount,
+            "per_day_salary": per_day_salary,
+            "base_net_pay": salary.net_pay
+        }
+    )
+    
+    return payslip_detail
+
+
+@router.get("/monthly-salary-logs", response_model=MonthlySalaryLogsResponse)
+def get_monthly_salary_logs(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Get monthly salary logs for current and previous month with leave information.
+    
+    This endpoint shows employee salary data including:
+    - Current month: Expected salary, leave data, payment status
+    - Previous month: Actual paid salary, leave data, payment status
+    - Leave information (paid/unpaid leaves) for both months
+    - Leave deductions and net salary calculations
+    - Payment dates and amounts
+    
+    Args:
+        current_employee: Current authenticated employee
+        db: Database session
+        
+    Returns:
+        MonthlySalaryLogsResponse: Current and previous month salary logs with leave data
+        
+    Raises:
+        HTTPException: 404 if salary information not found
+    """
+    from datetime import datetime, timedelta
+    from calendar import monthrange
+    import calendar
+    
+    # Get current date and calculate current/previous month
+    today = datetime.now()
+    current_month = today.month
+    current_year = today.year
+    
+    # Calculate previous month
+    if current_month == 1:
+        previous_month = 12
+        previous_year = current_year - 1
+    else:
+        previous_month = current_month - 1
+        previous_year = current_year
+    
+    # Get employee salary information
+    salary = db.query(Salary).filter(
+        Salary.employee_id == current_employee.id
+    ).first()
+    
+    if not salary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Salary information not found"
+        )
+    
+    # Get employee basic info
+    employee_name = current_employee.user.full_name if current_employee.user else ""
+    employee_email = current_employee.user.email if current_employee.user else ""
+    
+    # Function to get leave data for a specific month
+    def get_leave_data_for_month(year, month):
+        """Get leave data for specific month"""
+        # Get all leaves for the employee in this month
+        leaves = db.query(Leave).filter(
+            Leave.employee_id == current_employee.id
+        ).filter(
+            Leave.start_date >= datetime(year, month, 1).date()
+        ).filter(
+            Leave.start_date <= datetime(year, month, monthrange(year, month)[1]).date()
+        ).all()
+        
+        paid_leaves = 0.0
+        unpaid_leaves = 0.0
+        
+        for leave in leaves:
+            if leave.leave_type == 'paid':
+                paid_leaves += leave.days
+            elif leave.leave_type == 'unpaid':
+                unpaid_leaves += leave.days
+        
+        return paid_leaves, unpaid_leaves
+    
+    # Function to calculate salary for a month
+    def calculate_monthly_salary(year, month, is_current_month=False):
+        """Calculate salary data for a specific month"""
+        # Get payslip for this month if it exists
+        payslip = db.query(Payslip).filter(
+            Payslip.employee_id == current_employee.id,
+            Payslip.year == year,
+            Payslip.month == month
+        ).first()
+        
+        # Get leave data from Leave records
+        paid_leaves, unpaid_leaves = get_leave_data_for_month(year, month)
+        
+        # Calculate total days and working days
+        total_days = monthrange(year, month)[1]
+        
+        if payslip:
+            # Use actual payslip data
+            salary_amount = payslip.amount + (payslip.leave_deduction_amount or 0)  # Add back leave deduction to show full salary
+            net_salary = payslip.amount
+            paid_status = payslip.status
+            payment_date = payslip.processed_date.date() if payslip.processed_date else None
+            
+            # Use payslip data for working days and leave information
+            working_days = payslip.days_payable if payslip.days_payable is not None else total_days
+            unpaid_leaves = payslip.loss_of_pay_days if payslip.loss_of_pay_days is not None else unpaid_leaves
+            leave_deduction = payslip.leave_deduction_amount if payslip.leave_deduction_amount is not None else 0
+            
+        else:
+            # No payslip found - calculate expected values
+            salary_amount = salary.net_pay
+            net_salary = salary.net_pay
+            paid_status = "unpaid" if is_current_month else "not_processed"
+            payment_date = None
+            
+            # Calculate leave deduction for unpaid leaves
+            per_day_salary = salary.net_pay / total_days if total_days > 0 else 0
+            leave_deduction = unpaid_leaves * per_day_salary
+            working_days = total_days - unpaid_leaves
+        
+        return {
+            "month": month,
+            "year": year,
+            "salary_amount": salary_amount,
+            "paid_status": paid_status,
+            "payment_date": payment_date,
+            "total_days": total_days,
+            "working_days": working_days,
+            "paid_leaves": paid_leaves,
+            "unpaid_leaves": unpaid_leaves,
+            "leave_deduction": leave_deduction,
+            "net_salary": net_salary,
+            "description": f"Salary for {calendar.month_name[month]} {year}"
+        }
+    
+    # Calculate data for current and previous month
+    current_month_data = calculate_monthly_salary(current_year, current_month, is_current_month=True)
+    previous_month_data = calculate_monthly_salary(previous_year, previous_month, is_current_month=False)
+    
+    # Build final response
+    response = MonthlySalaryLogsResponse(
+        employee_id=current_employee.id,
+        employee_name=employee_name,
+        employee_email=employee_email,
+        department=current_employee.department or "",
+        designation=current_employee.designation or "",
+        current_month=current_month_data,
+        previous_month=previous_month_data,
+        generated_at=datetime.now()
+    )
+    
+    return response
